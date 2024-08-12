@@ -8,6 +8,7 @@ import passport from "passport";
 import userRouter from "./routes/userRouter.js";
 import authRouter from "./routes/authRouter.js";
 import "./strategies/passport.js";
+import menuItemRouter from "./routes/menuItemRouter.js";
 dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -30,6 +31,8 @@ app.get("/", (req, res) => {
 });
 app.use("/api/v1/users", userRouter);
 app.use("/api/v1/auth", authRouter);
+
+app.use('/api/v1/menu-items', menuItemRouter);
 
 app.use(passport.initialize());
 app.use(passport.session());
