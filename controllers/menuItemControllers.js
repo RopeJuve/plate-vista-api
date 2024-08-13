@@ -19,13 +19,7 @@ export const createMenuItem = async (req, res) => {
 };
 
 export const getMenuItem = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const menuItem = await MenuItem.findById(id);
-    return res.status(200).json(menuItem);
-  } catch (error) {
-    return res.status(500).send(error.message);
-  }
+  return res.status(200).json(req.item);
 };
 
 export const updateMenuItem = async (req, res) => {
@@ -41,11 +35,11 @@ export const updateMenuItem = async (req, res) => {
 };
 
 export const deleteMenuItem = async (req, res) => {
-    try {
-        const { id } = req.params;
-        await MenuItem.findByIdAndDelete(id);
-        return res.status(200).json({ message: "MenuItem deleted successfully" });
-    } catch (error) {
-        return res.status(500).send(error.message);
-    }
+  try {
+    const { id } = req.params;
+    await MenuItem.findByIdAndDelete(id);
+    return res.status(200).json({ message: "MenuItem deleted successfully" });
+  } catch (error) {
+    return res.status(500).send(error.message);
+  }
 };
