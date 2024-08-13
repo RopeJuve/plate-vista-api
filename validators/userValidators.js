@@ -4,13 +4,14 @@ export const userBodyValidation = [
   check("username", "Username is required")
     .not()
     .isEmpty()
-    .isLength({ min: 4 }),
-  check("email", "Invalid email").isEmail(),
-  check(
-    "password",
-    "Password is required",
-    "Password minimum 6 characters"
-  ).isLength({ min: 6 }),
+    .isLength({ min: 4 })
+    .withMessage("Username must be at least 4 characters long"),
+  check("email", "Invalid is required").isEmail().withMessage("Invalid email"),
+  check("password", "Password is required")
+    .not()
+    .isEmpty()
+    .isLength({ min: 6 })
+    .withMessage("Password must be at least 6 characters long"),
   (req, res, next) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -26,8 +27,14 @@ export const userUpdateValidation = [
     .isEmpty()
     .isLength({ min: 4 })
     .optional(),
-  check("email", "Email is required").isEmail().optional(),
-  check("password", "Password is required").isLength({ min: 6 }).optional(),
+  check("email", "Email is required")
+    .isEmail()
+    .withMessage("Invalid email")
+    .optional(),
+  check("password", "Password is required")
+    .isLength({ min: 6 })
+    .withMessage("Password must be at least 6 characters long")
+    .optional(),
   (req, res, next) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
