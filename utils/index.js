@@ -3,7 +3,6 @@ import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
 dotenv.config();
 
-
 export const hashPassword = async (password) => {
   const salt = await bcrypt.genSalt(10);
   return await bcrypt.hash(password, salt);
@@ -38,4 +37,20 @@ export const sanitizedUsers = (users) => {
 export const sanitizedUser = (user) => {
   const { password, __v, ...rest } = user._doc;
   return rest;
+};
+
+export const calculateTotal = async (items, model) => {
+  let total = 0;
+  await Promise.all(
+    items.map(async (item) => {
+      const menuItem = await model.findById(item.product);
+      if (!menuItem) {
+        throw new Error("MenuItem not found");
+      }
+      menuItem.numSold += item.quantity;
+      await menuItem.save();
+      total += menuItem.price * item.quantity;
+    })
+  );
+  return total;
 };

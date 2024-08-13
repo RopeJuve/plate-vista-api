@@ -19,6 +19,10 @@ const orderSchema = new Schema(
         },
       },
     ],
+    totalPrice: {
+      type: Number,
+      required: true,
+    },
     orderStatus: {
       type: String,
       default: "Not Processed",
