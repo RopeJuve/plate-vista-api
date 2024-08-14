@@ -1,6 +1,6 @@
 import MenuItem from "../models/menuItem.model.js";
 import Order from "../models/orders.model.js";
-import { calculateTotal } from "../utils/index.js";
+import {  updatedOrder } from "../utils/index.js";
 
 export const createOrder = async (req, res) => {
   try {
@@ -42,15 +42,8 @@ export const getOrder = async (req, res) => {
 export const updateOrder = async (req, res) => {
   try {
     const { order } = req;
-    const newTotalPrice = await calculateTotal(req.body.menuItems, MenuItem);
-    if (newTotalPrice === 0) {
-      return res.status(404).json({ message: "MenuItem not found" });
-    }
-    order.totalPrice += newTotalPrice;
-    order.menuItems = [...order.menuItems, ...req.body.menuItems];
-    await order.save();
-
-    res.status(200).json(order);
+    const newOrder = await updatedOrder(order, req.body, MenuItem);
+    res.status(200).json(newOrder);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

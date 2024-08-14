@@ -1,6 +1,7 @@
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
+import currency from "currency.js";
 dotenv.config();
 
 export const hashPassword = async (password) => {
@@ -40,17 +41,41 @@ export const sanitizedUser = (user) => {
 };
 
 export const calculateTotal = async (items, model) => {
-  let total = 0;
+  let total = currency(0);
   await Promise.all(
     items.map(async (item) => {
       const menuItem = await model.findById(item.product);
       if (!menuItem) {
-        throw new Error("MenuItem not found");
+        throw currency(0);
       }
-      menuItem.numSold += item.quantity;
+      menuItem.numSold = currency(menuItem.numSold).add(item.quantity);
       await menuItem.save();
-      total += menuItem.price * item.quantity;
+      const itemPrice = currency(menuItem.price);
+      const itemQuantity = currency(item.quantity);
+      const itemTotal = itemPrice.multiply(itemQuantity);
+      total = total.add(itemTotal);
     })
   );
-  return total;
+  return total.value;
+};
+
+export const updatedOrder = async (order, reqBody, MenuItem) => {
+  const newTotalPrice = await calculateTotal(reqBody.menuItems, MenuItem);
+  if (newTotalPrice === 0) {
+    return res.status(404).json({ message: "MenuItem not found" });
+  }
+  order.totalPrice = currency(order.totalPrice).add(newTotalPrice).value;
+  const existingMenuItems = order.menuItems.filter((item) => {
+    return item.product._id.toString() === reqBody.menuItems[0].product;
+  }).length;
+  if (existingMenuItems === 0) {
+    order.menuItems = [...order.menuItems, ...reqBody.menuItems];
+  } else {
+    const foundItem = order.menuItems.find(
+      (item) => item.product._id.toString() === reqBody.menuItems[0].product
+    );
+    foundItem.quantity += reqBody.menuItems[0].quantity;
+  }
+  await order.save();
+  return order;
 };
