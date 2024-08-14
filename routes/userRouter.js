@@ -21,6 +21,7 @@ const userRouter = express.Router();
 userRouter.get("/", getUsers);
 userRouter.post("/", userBodyValidation, checkBeforeCreate, createUser);
 userRouter.get("/:id", checkId, checkUser, getUserById);
+//TODO: Add the /:id/orders route here
 userRouter.put(
   "/:id",
   checkId,

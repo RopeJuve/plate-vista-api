@@ -11,7 +11,7 @@ export const jwtSingToken = (req, res, next) => {
     req.token = token;
     next();
   } catch (error) {
-    console.log(error);
+    return res.status(500).json({ message: "Internal server error " });
   }
 };
 
@@ -28,7 +28,6 @@ export const jwtVerifyToken = (req, res, next) => {
     req.user = user;
     next();
   } catch (error) {
-    console.log(error);
     return res.status(403).json({ message: "Forbidden" });
   }
 };
