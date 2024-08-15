@@ -8,7 +8,7 @@ export const jwtSingToken = (req, res, next) => {
   try {
     const token = generateToken(user);
     res.setHeader("Authorization", `Bearer ${token}`);
-    req.token = token;
+    req.user = user;
     next();
   } catch (error) {
     return res.status(500).json({ message: "Internal server error " });
