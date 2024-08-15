@@ -7,7 +7,7 @@ const authRouter = express.Router();
 
 authRouter.post(
   "/login",
-  passport.authenticate("local", { failureMessage: true }),
+  passport.authenticate("user-local", { failureMessage: true }),
   jwtSingToken,
   login
 );
