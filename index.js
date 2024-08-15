@@ -5,12 +5,14 @@ import dotenv from "dotenv";
 import session from "express-session";
 import connectToDatabase from "./db/db.js";
 import passport from "passport";
-import "./strategies/passport.js";
+import userPassport from "./strategies/userPassport.js";
+import employeePassport from "./strategies/employeePassport.js";
 import {
   userRouter,
   authRouter,
   menuItemRouter,
   orderRouter,
+  employeeRouter,
 } from "./routes/index.js";
 
 dotenv.config();
@@ -30,9 +32,14 @@ app.use(
   })
 );
 
+userPassport(passport);
+employeePassport(passport);
+
 app.get("/", (req, res) => {
   res.send("Plate Vista API");
 });
+
+app.use("/api/v1/employee", employeeRouter);
 app.use("/api/v1/users", userRouter);
 app.use("/api/v1/auth", authRouter);
 

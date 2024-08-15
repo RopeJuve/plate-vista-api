@@ -1,3 +1,4 @@
+
 import { generateToken, verifyToken } from "../utils/index.js";
 
 export const jwtSingToken = (req, res, next) => {
@@ -14,6 +15,7 @@ export const jwtSingToken = (req, res, next) => {
     return res.status(500).json({ message: "Internal server error " });
   }
 };
+
 
 export const jwtVerifyToken = (req, res, next) => {
   const authHeader = req.headers.authorization;

@@ -1,8 +1,13 @@
 export const login = (req, res) => {
   const { user } = req;
-  res
+  if (user.username) {
+    return res
+      .status(200)
+      .json({ message: "Logged in successfully", username: user.username });
+  }
+  return res
     .status(200)
-    .json({ message: "Logged in successfully", username: user.username });
+    .json({ message: "Logged in successfully", position: user.position });
 };
 export const authenticateWithToken = (req, res) => {
   const { user } = req;
