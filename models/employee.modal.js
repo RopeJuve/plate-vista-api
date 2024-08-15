@@ -2,13 +2,15 @@ import { Schema, model } from "mongoose";
 
 const employeeSchema = new Schema(
   {
-    name: {
+    employee: {
       type: String,
       required: true,
+      unique: true,
     },
     email: {
       type: String,
       required: true,
+      unique: true,
     },
     password: {
       type: String,
