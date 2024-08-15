@@ -5,7 +5,7 @@ const employeeSchema = new Schema(
     employee: {
       type: String,
       required: true,
-      unique: true
+      unique: true,
     },
     email: {
       type: String,
