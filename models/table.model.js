@@ -11,22 +11,29 @@ const tableSchema = new Schema(
       type: Number,
       required: true,
     },
-    isOccupied: {
-      type: Boolean,
-      default: false,
+    status: {
+      type: String,
+      enum: ["occupied", "vacant", "reserved"],
+      default: "vacant",
     },
-    orders: [
-      {
-        type: Schema.Types.ObjectId,
-        ref: "Order",
-      },
-    ],
-    customers: [
-      {
-        type: Schema.Types.ObjectId,
-        ref: "User",
-      },
-    ],
+    orders: {
+      type: [
+        {
+          type: Schema.Types.ObjectId,
+          ref: "Order",
+        },
+      ],
+      default: [],
+    },
+    customers: {
+      type: [
+        {
+          type: Schema.Types.ObjectId,
+          ref: "Customer",
+        },
+      ],
+      default: [],
+    },
   },
   {
     timestamps: true,
