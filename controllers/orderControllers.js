@@ -1,6 +1,6 @@
 import MenuItem from "../models/menuItem.model.js";
 import Order from "../models/orders.model.js";
-import {  updatedOrder } from "../utils/index.js";
+import { updatedOrder, calculateTotal } from "../utils/index.js";
 
 export const createOrder = async (req, res) => {
   try {
