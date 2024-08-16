@@ -12,7 +12,11 @@ export const getEmployees = async (req, res) => {
 };
 
 export const getEmployeeById = async (req, res) => {
-  res.status(200).json(sanitizedUser(req.employee));
+  try {
+    res.status(200).json(sanitizedUser(req.employee));
+  } catch (error) {
+    res.status(500).json({ message: "Internal server error" });
+  }
 };
 
 export const createEmployee = async (req, res) => {
