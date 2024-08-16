@@ -4,7 +4,7 @@ import menuItemRouter from "./menuItemRouter.js";
 import orderRouter from "./orderRouter.js";
 import employeeRouter from "./employeeRouter.js";
 import tableRouter from "./tableRouter.js";
-
+import statisticsRouter from "./statisticsRouter.js";
 export {
   authRouter,
   userRouter,
@@ -12,4 +12,5 @@ export {
   orderRouter,
   employeeRouter,
   tableRouter,
+  statisticsRouter
 };

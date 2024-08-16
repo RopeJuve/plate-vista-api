@@ -13,10 +13,9 @@ import {
   menuItemRouter,
   orderRouter,
   employeeRouter,
-  tableRouter
+  tableRouter,
+  statisticsRouter,
 } from "./routes/index.js";
-
-
 
 dotenv.config();
 const app = express();
@@ -48,7 +47,9 @@ app.use("/api/v1/auth", authRouter);
 
 app.use("/api/v1/menu-items", menuItemRouter);
 app.use("/api/v1/orders", orderRouter);
-app.use('/api/v1/table', tableRouter);
+app.use("/api/v1/table", tableRouter);
+
+app.use("/api/v1/statistics", statisticsRouter);
 
 app.use(passport.initialize());
 app.use(passport.session());

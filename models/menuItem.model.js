@@ -34,6 +34,8 @@ const menuItemSchema = new Schema({
     type: Boolean,
     default: true,
   },
+},{
+  timestamps: true,
 });
 
 const MenuItem = model("MenuItem", menuItemSchema);
