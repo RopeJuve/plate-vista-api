@@ -5,6 +5,7 @@ import {
   getOrder,
   getOrders,
   updateOrder,
+  updateOrderStatus,
 } from "../controllers/orderControllers.js";
 import { checkOrderExists } from "../middlewares/orderMiddlewares.js";
 import { checkId } from "../middlewares/usersMiddlewares.js";
@@ -17,6 +18,7 @@ orderRouter.get("/", getOrders);
 orderRouter.post("/", checkBody, createOrder);
 orderRouter.get("/:id", checkId, checkOrderExists, getOrder);
 orderRouter.put("/:id", checkId, checkOrderExists, updateOrder);
+orderRouter.put("/:id/status", checkId, checkOrderExists, updateOrderStatus);
 orderRouter.delete("/:id", checkId, checkOrderExists, deleteOrder);
 
 export default orderRouter;
