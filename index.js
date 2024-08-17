@@ -16,14 +16,20 @@ import {
   tableRouter,
   statisticsRouter,
 } from "./routes/index.js";
+import { wsServer } from "./wss.js";
 
 dotenv.config();
 const app = express();
+
 const PORT = process.env.PORT || 8080;
 
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.json());
-app.use(cors());
+app.use(
+  cors({
+    origin: "*",
+  })
+);
 app.use(express.json());
 
 app.use(
@@ -55,6 +61,9 @@ app.use(passport.initialize());
 app.use(passport.session());
 
 await connectToDatabase();
-app.listen(PORT, () => {
+const s = app.listen(PORT, () => {
   console.log(`Server is running on http://localhost:${PORT}`);
 });
+
+
+wsServer(s);
