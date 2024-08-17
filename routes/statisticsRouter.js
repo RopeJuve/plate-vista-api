@@ -4,12 +4,16 @@ import {
   getTotalSales,
   getSalesByMenuItem,
   getOrdersByDate,
+  getTopCustomers,
+  getUserOrdersByDate,
 } from "../controllers/statisticsController.js";
 
-const router = express.Router();
+const statisticRouter = express.Router();
 
-router.get("/sales", getTotalSales);
-router.get("/sales/menu-items", getSalesByMenuItem);
-router.get("/orders/by-date", getOrdersByDate);
+statisticRouter.get("/sales", getTotalSales);
+statisticRouter.get("/sales/menu-items", getSalesByMenuItem);
+statisticRouter.get("/orders/by-date", getOrdersByDate);
+statisticRouter.get("/:id/orders", getUserOrdersByDate);
+statisticRouter.get("/customers/top", getTopCustomers);
 
-export default router;
+export default statisticRouter;
