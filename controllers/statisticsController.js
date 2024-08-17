@@ -87,7 +87,7 @@ export const getOrdersByDate = async (req, res) => {
     const groupByField =
       group_by === "month"
         ? { $dateToString: { format: "%Y-%m", date: "$createdAt" } }
-        : { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } };
+        : { $dateToString: { format: "%d-%m-%Y", date: "$createdAt" } };
 
     if (start_date && end_date) {
       query.createdAt = {
