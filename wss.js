@@ -7,6 +7,7 @@ import {
   createOrderAction,
   updateOrderAction,
   changeStatusAction,
+  deleteOrderAction,
 } from "./actions/orderActions.js";
 
 let connections = {};
@@ -49,6 +50,8 @@ const handleMessages = async (bytes, tableNum, userId) => {
           tableNum
         );
         break;
+      case "DELETE_ORDER":
+        await deleteOrderAction(message.payload, broadcast, user, tableNum);
       default:
         break;
     }

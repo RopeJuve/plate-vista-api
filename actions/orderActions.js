@@ -63,3 +63,14 @@ export const changeStatusAction = async (
     console.log(err);
   }
 };
+
+export const deleteOrderAction = async (payload, broadcast, user, tableNum) => {
+  try {
+    const { orderId } = payload;
+    await Order.findByIdAndDelete(orderId);
+    user.state = {};
+    broadcast(tableNum);
+  } catch (err) {
+    console.log(err);
+  }
+};
