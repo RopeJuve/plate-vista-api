@@ -59,6 +59,15 @@ export const calculateTotal = async (items, model) => {
   return total.value;
 };
 
+export const populateMenuItem = async (items, MenuItem) => {
+  return await Promise.all(
+    items.map(async (item) => {
+      const menuItem = await MenuItem.findById(item.product);
+      return { product: menuItem, quantity: item.quantity };
+    })
+  );
+};
+
 export const updatedOrder = async (order, reqBody, MenuItem) => {
   const newTotalPrice = await calculateTotal(reqBody.menuItems, MenuItem);
   if (newTotalPrice === 0) {

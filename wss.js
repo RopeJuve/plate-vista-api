@@ -1,11 +1,13 @@
-import { WebSocketServer, WebSocket } from "ws";
-import Order from "./models/orders.model.js";
+import { WebSocketServer } from "ws";
 import url from "url";
-import { v4 as uuidv4 } from 'uuid';
+import { v4 as uuidv4 } from "uuid";
 import Employee from "./models/employee.modal.js";
 import User from "./models/user.model.js";
-import MenuItem from "./models/menuItem.model.js";
-import { calculateTotal } from "./utils/index.js";
+import {
+  createOrderAction,
+  updateOrderAction,
+  changeStatusAction,
+} from "./actions/orderActions.js";
 
 let connections = {};
 let users = {};
@@ -27,21 +29,28 @@ const broadcast = (tableNum) => {
 const handleMessages = async (bytes, tableNum, userId) => {
   try {
     const message = JSON.parse(bytes.toString());
-    const user = users[tableNum] || users[userId];
+    const user = users[userId] ? users[userId] : users[tableNum];
 
-    if (message.type === "order") {
-      const { menuItems, quantity } = message.payload;
-      const totalPrice = await calculateTotal(menuItems, MenuItem);
-      const order = new Order({
-        menuItems,
-        quantity,
-        totalPrice,
-      });
-      await order.save();
-      await order.populate("menuItems.product");
-      user.state = order;
-      broadcast(tableNum);
-      console.log(user);
+    switch (message.type) {
+      case "NEW_ORDER":
+        await createOrderAction(message.payload, broadcast, user, tableNum);
+        break;
+      case "UPDATE_ORDER":
+        await updateOrderAction(message.payload, broadcast, user, tableNum);
+        break;
+      case "CHANGE_STATUS":
+        await changeStatusAction(message.payload, broadcast, user, tableNum);
+        break;
+      case "COMPLETE_ORDER":
+        await changeStatusAction(
+          { orderId: message.payload.orderId, status: "Completed" },
+          broadcast,
+          user,
+          tableNum
+        );
+        break;
+      default:
+        break;
     }
   } catch (err) {
     console.log(err);
@@ -96,11 +105,9 @@ export const wsServer = async (server) => {
           username: userData.username,
           state: {},
         };
-        }
       }
-    console.log(
-      `User: ${users[tableNum] || users[tableNum]}`
-    );
+    }
+    console.log(`User: ${users[tableNum] || users[tableNum]}`);
     console.log(users);
     console.log(`Table number: ${tableNum}`);
     connection.on("message", async (message) => {
