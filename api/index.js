@@ -1,3 +1,3 @@
-import s from "../index.js";
+import app from "../index.js";
 
-export default s; 
+export default app; 
