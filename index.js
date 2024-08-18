@@ -67,3 +67,5 @@ const s = app.listen(PORT, () => {
 
 
 wsServer(s);
+
+export default app;
