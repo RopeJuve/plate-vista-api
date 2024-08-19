@@ -89,7 +89,7 @@ export const wsServer = async (server) => {
     const { tableNum, userId } = url.parse(request.url, true).query;
     if (!userId) {
       connections[uuid] = connection;
-      users[tableNum] = {
+      users[uuid] = {
         username: `Guest`,
         state: {},
       };
