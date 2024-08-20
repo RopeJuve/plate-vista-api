@@ -17,6 +17,7 @@ export const createOrderAction = async (payload, broadcast, user, tableNum) => {
     });
     await order.save();
     await order.populate("menuItems.product");
+    console.log(order);
     user.state = order;
     broadcast(tableNum);
   } catch (err) {
