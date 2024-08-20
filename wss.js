@@ -33,16 +33,16 @@ const handleMessages = async (bytes, tableNum, userId, uuid) => {
     const user = users[userId] ? users[userId] : users[uuid];
 
     switch (message.type) {
-      case "NEW_ORDER":
+      case "NEW ORDER":
         await createOrderAction(message.payload, broadcast, user, tableNum);
         break;
-      case "UPDATE_ORDER":
+      case "UPDATE ORDER":
         await updateOrderAction(message.payload, broadcast, user, tableNum);
         break;
-      case "CHANGE_STATUS":
+      case "CHANGE STATUS":
         await changeStatusAction(message.payload, broadcast, user, tableNum);
         break;
-      case "COMPLETE_ORDER":
+      case "COMPLETE ORDER":
         await changeStatusAction(
           { orderId: message.payload.orderId, status: "Completed" },
           broadcast,
@@ -50,7 +50,7 @@ const handleMessages = async (bytes, tableNum, userId, uuid) => {
           tableNum
         );
         break;
-      case "DELETE_ORDER":
+      case "DELETE ORDER":
         await deleteOrderAction(message.payload, broadcast, user, tableNum);
       default:
         break;
