@@ -67,10 +67,12 @@ const handleMessages = async (bytes, tableNum, userId, uuid) => {
 };
 
 const handleClose = (uuid, userId) => {
-  delete connections[userId];
-  delete connections[uuid];
-  delete users[uuid];
-  delete users[userId];
+  Object.keys(connections).forEach((id) => {
+    if (id === uuid || id === userId) {
+      delete connections[id];
+      delete users[id];
+    }
+  });
   broadcast();
 };
 
