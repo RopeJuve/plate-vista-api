@@ -93,7 +93,7 @@ export const wsServer = async (server) => {
         username: `Guest`,
         state: {},
       };
-      console.log(`User: ${users[tableNum].username}`);
+      console.log(`User: ${users[uuid].username}`);
     } else {
       connections[userId] = connection;
       const userData = await User.findById(userId);
@@ -110,7 +110,6 @@ export const wsServer = async (server) => {
         };
       }
     }
-    console.log(`User: ${users[tableNum] || users[tableNum]}`);
     console.log(users);
     console.log(`Table number: ${tableNum}`);
     connection.on("message", async (message) => {

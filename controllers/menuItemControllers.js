@@ -2,8 +2,22 @@ import MenuItem from "../models/menuItem.model.js";
 
 export const getMenuItems = async (req, res) => {
   try {
+    const { category } = req.query;
+    if (category) {
+      const menuItems = await MenuItem.find({ category });
+      return res.status(200).json(menuItems);
+    }
     const menuItems = await MenuItem.find();
     return res.status(200).json(menuItems);
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+};
+
+export const getAllCategory = async (req, res) => {
+  try {
+    const categories = await MenuItem.distinct("category");
+    return res.status(200).json(categories);
   } catch (error) {
     return res.status(500).json({ error: error.message });
   }

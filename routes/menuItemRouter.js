@@ -5,6 +5,7 @@ import {
   getMenuItem,
   updateMenuItem,
   deleteMenuItem,
+  getAllCategory,
 } from "../controllers/menuItemControllers.js";
 import {
   menuItemBodyValidation,
@@ -19,6 +20,7 @@ import {
 const menuItemRouter = express.Router();
 
 menuItemRouter.get("/", getMenuItems);
+menuItemRouter.get("/category", getAllCategory);
 menuItemRouter.post(
   "/",
   menuItemBodyValidation,
