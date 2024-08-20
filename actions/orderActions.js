@@ -11,8 +11,8 @@ export const createOrderAction = async (payload, broadcast, user, tableNum) => {
     const { menuItems } = payload;
     const totalPrice = await calculateTotal(menuItems, MenuItem);
     const order = new Order({
+      user: payload.user || null,
       menuItems,
-      quantity: menuItems.quantity,
       totalPrice,
     });
     await order.save();
