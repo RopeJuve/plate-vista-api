@@ -32,7 +32,7 @@ const handleMessages = async (bytes, tableNum, userId, uuid) => {
   try {
     const message = JSON.parse(bytes.toString());
     const user = users[userId] ? users[userId] : users[uuid];
-    console.log(user)
+    console.log(message.type)
 
     switch (message.type) {
       case "newOrder":
