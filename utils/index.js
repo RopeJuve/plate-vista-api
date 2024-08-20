@@ -41,7 +41,7 @@ export const sanitizedUser = (user) => {
 };
 
 export const calculateTotal = async (items, model) => {
-  let total = currency(0);
+  let total = currency(0).value;
   await Promise.all(
     items.map(async (item) => {
       const menuItem = await model.findById(item.product);
