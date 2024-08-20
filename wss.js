@@ -17,6 +17,7 @@ const broadcast = (tableNum) => {
   console.log(Object.keys(connections));
   Object.keys(connections).forEach((id) => {
     const connection = connections[id];
+    console.log(`connection from broadcast: ${connection}`);
     connection.send(
       JSON.stringify({
         type: "orderSuccess",
@@ -31,6 +32,7 @@ const handleMessages = async (bytes, tableNum, userId, uuid) => {
   try {
     const message = JSON.parse(bytes.toString());
     const user = users[userId] ? users[userId] : users[uuid];
+    console.log(user)
 
     switch (message.type) {
       case "newOrder":
@@ -98,8 +100,10 @@ export const wsServer = async (server) => {
         state: {},
       };
       console.log(`User: ${users[uuid].username}`);
+      console.log(`connection: ${connections[uuid]}`);
     } else {
       connections[userId] = connection;
+      console.log(`connection: ${connections[userId]}`);
       const userData = await User.findById(userId);
       const employeeData = await Employee.findById(userId);
       if (!userData) {
