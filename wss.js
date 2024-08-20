@@ -27,10 +27,10 @@ const broadcast = (tableNum) => {
   });
 };
 
-const handleMessages = async (bytes, tableNum, userId) => {
+const handleMessages = async (bytes, tableNum, userId, uuid) => {
   try {
     const message = JSON.parse(bytes.toString());
-    const user = users[userId] ? users[userId] : users[tableNum];
+    const user = users[userId] ? users[userId] : users[uuid];
 
     switch (message.type) {
       case "NEW_ORDER":
@@ -66,9 +66,11 @@ const handleMessages = async (bytes, tableNum, userId) => {
   }
 };
 
-const handleClose = (tableNum) => {
-  delete connections[tableNum];
-  delete users[tableNum];
+const handleClose = (uuid, userId) => {
+  delete connections[userId];
+  delete connections[uuid];
+  delete users[uuid];
+  delete users[userId];
   broadcast();
 };
 
@@ -113,10 +115,10 @@ export const wsServer = async (server) => {
     console.log(users);
     console.log(`Table number: ${tableNum}`);
     connection.on("message", async (message) => {
-      await handleMessages(message, tableNum, userId);
+      await handleMessages(message, tableNum, userId, uuid);
     });
 
-    wss.on("close", () => handleClose(tableNum));
+    wss.on("close", () => handleClose(uuid, userId));
     return wss;
   });
 };
