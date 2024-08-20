@@ -41,12 +41,12 @@ export const sanitizedUser = (user) => {
 };
 
 export const calculateTotal = async (items, model) => {
-  let total = currency(0).value;
+  let total = currency(0);
   await Promise.all(
     items.map(async (item) => {
       const menuItem = await model.findById(item.product);
       if (!menuItem) {
-        throw currency(0);
+        throw currency(0).value;
       }
       menuItem.numSold = currency(menuItem.numSold).add(item.quantity);
       await menuItem.save();
