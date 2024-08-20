@@ -33,16 +33,16 @@ const handleMessages = async (bytes, tableNum, userId, uuid) => {
     const user = users[userId] ? users[userId] : users[uuid];
 
     switch (message.type) {
-      case "NEW ORDER":
+      case "newOrder":
         await createOrderAction(message.payload, broadcast, user, tableNum);
         break;
-      case "UPDATE ORDER":
+      case "updateOrder":
         await updateOrderAction(message.payload, broadcast, user, tableNum);
         break;
-      case "CHANGE STATUS":
+      case "changeStatus":
         await changeStatusAction(message.payload, broadcast, user, tableNum);
         break;
-      case "COMPLETE ORDER":
+      case "completeOrder":
         await changeStatusAction(
           { orderId: message.payload.orderId, status: "Completed" },
           broadcast,
@@ -50,7 +50,7 @@ const handleMessages = async (bytes, tableNum, userId, uuid) => {
           tableNum
         );
         break;
-      case "DELETE ORDER":
+      case "deleteOrder":
         await deleteOrderAction(message.payload, broadcast, user, tableNum);
       default:
         break;
@@ -66,14 +66,14 @@ const handleMessages = async (bytes, tableNum, userId, uuid) => {
   }
 };
 
-const handleClose = (uuid, userId) => {
+const handleClose = (tableNum, uuid, userId) => {
   Object.keys(connections).forEach((id) => {
     if (id === uuid || id === userId) {
       delete connections[id];
       delete users[id];
     }
   });
-  broadcast();
+  broadcast(tableNum);
 };
 
 export const wsServer = async (server) => {
@@ -120,7 +120,7 @@ export const wsServer = async (server) => {
       await handleMessages(message, tableNum, userId, uuid);
     });
 
-    wss.on("close", () => handleClose(uuid, userId));
+    wss.on("close", () => handleClose(tableNum, uuid, userId));
     return wss;
   });
 };
