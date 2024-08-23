@@ -109,8 +109,8 @@ export const wsServer = async (server) => {
     console.log("Client connected");
     const uuid = uuidv4();
     const { tableNum, userId } = url.parse(request.url, true).query;
-    const isUserIdValid = userId && userId.trim() !== '';
-    if (!isUserIdValid) {
+    
+    if (!userId) {
       connections[uuid] = connection;
       users[uuid] = {
         username: `Guest`,
