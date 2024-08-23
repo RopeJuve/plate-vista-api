@@ -9,6 +9,7 @@ import {
 export const createOrderAction = async (payload, broadcast, user, tableNum) => {
   try {
     const { menuItems } = payload;
+    console.log(payload.user)
     const totalPrice = await calculateTotal(menuItems, MenuItem);
     const order = new Order({
       user: payload.user || null,
