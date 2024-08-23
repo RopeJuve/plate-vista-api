@@ -32,7 +32,7 @@ const handleMessages = async (bytes, tableNum, userId, uuid) => {
   try {
     const message = JSON.parse(bytes.toString());
     const user = users[userId] ? users[userId] : users[uuid];
-    console.log(message.type)
+    console.log(message.type);
 
     switch (message.type) {
       case "newOrder":
@@ -59,23 +59,39 @@ const handleMessages = async (bytes, tableNum, userId, uuid) => {
     }
   } catch (err) {
     console.log(err);
-    connections[tableNum].send(
-      JSON.stringify({
-        type: "orderError",
-        message: "Failed to process order",
-      })
-    );
+    Object.keys(connections).forEach((id) => {
+      connections[id].send(
+        JSON.stringify({
+          type: "error",
+          payload: "Invalid request",
+        })
+      );
+    });
   }
 };
 
 const handleClose = (tableNum, uuid, userId) => {
-  Object.keys(connections).forEach((id) => {
-    if (id === uuid || id === userId) {
-      delete connections[id];
-      delete users[id];
-    }
-  });
-  broadcast(tableNum);
+  let connectionRemoved = false;
+
+  if (uuid && connections[uuid]) {
+    delete connections[uuid];
+    delete users[uuid];
+    connectionRemoved = true;
+    console.log(`Connection with UUID: ${uuid} has been removed.`);
+  }
+
+  if (userId && connections[userId]) {
+    delete connections[userId];
+    delete users[userId];
+    connectionRemoved = true;
+    console.log(`Connection with User ID: ${userId} has been removed.`);
+  }
+
+  if (connectionRemoved) {
+    broadcast(tableNum);
+  } else {
+    console.log(`No connections found for UUID: ${uuid} or User ID: ${userId}`);
+  }
 };
 
 export const wsServer = async (server) => {
