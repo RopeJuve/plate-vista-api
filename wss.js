@@ -22,7 +22,7 @@ const broadcast = (tableNum) => {
       JSON.stringify({
         type: "orderSuccess",
         tableNum,
-        payload: users,
+        payload: users[id].state,
       })
     );
   });
