@@ -9,7 +9,7 @@ import {
 export const createOrderAction = async (payload, broadcast, user, tableNum) => {
   try {
     const { menuItems } = payload;
-    console.log(payload.user)
+    console.log(payload.user);
     const totalPrice = await calculateTotal(menuItems, MenuItem);
     const order = new Order({
       user: payload.user || null,
@@ -20,7 +20,7 @@ export const createOrderAction = async (payload, broadcast, user, tableNum) => {
     await order.populate("menuItems.product");
     console.log(order);
     user.state = order;
-    broadcast(tableNum);
+    broadcast(tableNum, order);
   } catch (err) {
     console.log(err);
   }

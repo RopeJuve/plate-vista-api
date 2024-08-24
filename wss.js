@@ -13,7 +13,7 @@ import {
 let connections = {};
 let users = {};
 
-const broadcast = (tableNum) => {
+const broadcast = (tableNum, payload) => {
   console.log(Object.keys(connections));
   Object.keys(connections).forEach((id) => {
     const connection = connections[id];
@@ -22,7 +22,8 @@ const broadcast = (tableNum) => {
       JSON.stringify({
         type: "orderSuccess",
         tableNum,
-        payload: users[id].state,
+        payload,
+        user: users[id],
       })
     );
   });
@@ -109,7 +110,7 @@ export const wsServer = async (server) => {
     console.log("Client connected");
     const uuid = uuidv4();
     const { tableNum, userId } = url.parse(request.url, true).query;
-    
+
     if (!userId) {
       connections[uuid] = connection;
       users[uuid] = {
