@@ -36,7 +36,7 @@ export const updateOrderAction = async (payload, broadcast, user, tableNum) => {
     user.state = {
       menuItems: items,
     };
-    broadcast(tableNum);
+    broadcast(tableNum, upO);
   } catch (err) {
     console.log(err);
   }
@@ -60,7 +60,7 @@ export const changeStatusAction = async (
     user.state = {
       orderStatus: orderUpdate.orderStatus,
     };
-    broadcast(tableNum);
+    broadcast(tableNum, orderUpdate);
   } catch (err) {
     console.log(err);
   }
