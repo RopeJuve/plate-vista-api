@@ -89,7 +89,7 @@ const handleClose = (tableNum, uuid, userId) => {
   }
 
   if (connectionRemoved) {
-    broadcast(tableNum);
+    broadcast(tableNum, { type: "close" });
   } else {
     console.log(`No connections found for UUID: ${uuid} or User ID: ${userId}`);
   }
@@ -111,7 +111,7 @@ export const wsServer = async (server) => {
     const uuid = uuidv4();
     const { tableNum, userId } = url.parse(request.url, true).query;
 
-    if (!userId) {
+    if (!userId && userId === '') {
       connections[uuid] = connection;
       users[uuid] = {
         username: `Guest`,
