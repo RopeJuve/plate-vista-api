@@ -122,18 +122,23 @@ export const wsServer = async (server) => {
     } else {
       connections[userId] = connection;
       console.log(`connection: ${connections[userId]}`);
-      const userData = await User.findById(userId);
-      const employeeData = await Employee.findById(userId);
-      if (!userData) {
-        users[employeeData._id] = {
-          employee: employeeData.employee,
-          state: {},
-        };
-      } else {
-        users[userData._id] = {
-          username: userData.username,
-          state: {},
-        };
+      try {
+        const userData = await User.findById(userId);
+        const employeeData = await Employee.findById(userId);
+
+        if (!userData && employeeData) {
+          users[employeeData._id] = {
+            employee: employeeData.employee,
+            state: {},
+          };
+        } else if (userData) {
+          users[userData._id] = {
+            username: userData.username,
+            state: {},
+          };
+        }
+      } catch (error) {
+        console.error("Error fetching user or employee data:", error);
       }
     }
     console.log(users);
