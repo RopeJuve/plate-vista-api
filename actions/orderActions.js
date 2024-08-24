@@ -57,6 +57,7 @@ export const changeStatusAction = async (
       },
       { new: true }
     );
+    await orderUpdate.populate("menuItems.product");
     user.state = {
       orderStatus: orderUpdate.orderStatus,
     };
