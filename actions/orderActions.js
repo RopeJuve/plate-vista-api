@@ -1,5 +1,6 @@
 import MenuItem from "../models/menuItem.model.js";
 import Order from "../models/orders.model.js";
+import Table from "../models/table.model.js";
 import {
   calculateTotal,
   populateMenuItem,
@@ -18,9 +19,13 @@ export const createOrderAction = async (payload, broadcast, user, tableNum) => {
     });
     await order.save();
     await order.populate("menuItems.product");
+    const tableOrders = await Table.findOne({ tableNumber: tableNum });
+    tableOrders.orders.push(order._id);
+    await tableOrders.save();
+    await tableOrders.populate("orders");
     console.log(order);
     user.state = order;
-    broadcast(tableNum, order);
+    broadcast(tableNum, tableOrders);
   } catch (err) {
     console.log(err);
   }
