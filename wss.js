@@ -145,8 +145,9 @@ export const wsServer = async (server) => {
     console.log(users);
     console.log(`Table number: ${tableNum}`);
     const table = await Table.findOne({ tableNumber: tableNum });
-    await table.populate("orders");
-    broadcast(tableNum, table);
+    const populateTable = await table.populate("orders")
+    await populateTable.populate("orders.menuItems.product").execPopulate();
+    broadcast(tableNum, populateTable);
     connection.on("message", async (message) => {
       await handleMessages(message, tableNum, userId, uuid);
     });
