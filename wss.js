@@ -144,11 +144,13 @@ export const wsServer = async (server) => {
     }
     console.log(users);
     console.log(`Table number: ${tableNum}`);
-    const table = await Table.findOne({ tableNumber: tableNum }).populate(
-      "orders"
-    );
+    const table = await Table.findOne({ tableNumber: tableNum }).populate({
+      path: 'orders',
+      populate: {
+        path: 'menuItems.product'
+      }
+    });
 
-    await table.populate("orders.menuItems.product").execPopulate();
     broadcast(tableNum, table);
     connection.on("message", async (message) => {
       await handleMessages(message, tableNum, userId, uuid);
