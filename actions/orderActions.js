@@ -22,7 +22,12 @@ export const createOrderAction = async (payload, broadcast, user, tableNum) => {
     const tableOrders = await Table.findOne({ tableNumber: tableNum });
     tableOrders.orders.push(order._id);
     await tableOrders.save();
-    await tableOrders.populate("orders");
+    await tableOrders.populate({
+      path: 'orders',
+      populate: {
+        path: 'menuItems.product'
+      }
+    });
     console.log(order);
     user.state = order;
     broadcast(tableNum, tableOrders);
@@ -64,7 +69,12 @@ export const changeStatusAction = async (
     );
     await orderUpdate.populate("menuItems.product");
     const tableOrders = await Table.findOne({ tableNumber: tableNum });
-    await tableOrders.populate("orders");
+    await tableOrders.populate({
+      path: 'orders',
+      populate: {
+        path: 'menuItems.product'
+      }
+    });
     user.state = {
       orderStatus: orderUpdate.orderStatus,
     };
