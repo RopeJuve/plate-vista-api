@@ -112,7 +112,7 @@ export const wsServer = async (server) => {
     const uuid = uuidv4();
     const { tableNum, userId } = url.parse(request.url, true).query;
 
-    if (!userId && userId === '') {
+    if (!userId && userId === "") {
       connections[uuid] = connection;
       users[uuid] = {
         username: `Guest`,
@@ -144,10 +144,12 @@ export const wsServer = async (server) => {
     }
     console.log(users);
     console.log(`Table number: ${tableNum}`);
-    const table = await Table.findOne({ tableNumber: tableNum });
-    const populateTable = await table.populate("orders")
-    await populateTable.populate("orders.menuItems.product").execPopulate();
-    broadcast(tableNum, populateTable);
+    const table = await Table.findOne({ tableNumber: tableNum }).populate(
+      "orders"
+    );
+
+    await table.populate("orders.menuItems.product").execPopulate();
+    broadcast(tableNum, table);
     connection.on("message", async (message) => {
       await handleMessages(message, tableNum, userId, uuid);
     });
