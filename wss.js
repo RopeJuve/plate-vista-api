@@ -24,7 +24,7 @@ const broadcast = (tableNum, payload) => {
         type: "orderSuccess",
         tableNum,
         payload,
-        user: users[id].username || users[id].employee,
+        user: users[id],
       })
     );
   });
