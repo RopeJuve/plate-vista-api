@@ -63,10 +63,12 @@ export const changeStatusAction = async (
       { new: true }
     );
     await orderUpdate.populate("menuItems.product");
+    const tableOrders = await Table.findOne({ tableNumber: tableNum });
+    await tableOrders.populate("orders");
     user.state = {
       orderStatus: orderUpdate.orderStatus,
     };
-    broadcast(tableNum, orderUpdate);
+    broadcast(tableNum, tableOrders);
   } catch (err) {
     console.log(err);
   }

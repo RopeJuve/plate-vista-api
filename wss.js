@@ -3,6 +3,7 @@ import url from "url";
 import { v4 as uuidv4 } from "uuid";
 import Employee from "./models/employee.modal.js";
 import User from "./models/user.model.js";
+import Table from "../models/table.model.js";
 import {
   createOrderAction,
   updateOrderAction,
@@ -23,7 +24,7 @@ const broadcast = (tableNum, payload) => {
         type: "orderSuccess",
         tableNum,
         payload,
-        user: users[id],
+        user: users[id].username || users[id].employee,
       })
     );
   });
@@ -143,6 +144,8 @@ export const wsServer = async (server) => {
     }
     console.log(users);
     console.log(`Table number: ${tableNum}`);
+    const table = await Table.findOne({ tableNumber: tableNum });
+    broadcast(tableNum, table);
     connection.on("message", async (message) => {
       await handleMessages(message, tableNum, userId, uuid);
     });
