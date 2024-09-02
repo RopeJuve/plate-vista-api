@@ -3,7 +3,7 @@ import url from "url";
 import { v4 as uuidv4 } from "uuid";
 import Employee from "./models/employee.modal.js";
 import User from "./models/user.model.js";
-import Table from "../models/table.model.js";
+import Table from "./models/table.model.js";
 import {
   createOrderAction,
   updateOrderAction,
