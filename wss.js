@@ -143,6 +143,7 @@ export const wsServer = async (server) => {
       connections[uuid] = connection;
       users[uuid] = {
         username: `Guest`,
+        tableNum,
         state: {},
       };
       console.log(`User: ${users[uuid].username}`);
@@ -157,11 +158,13 @@ export const wsServer = async (server) => {
         if (!userData && employeeData) {
           users[employeeData._id] = {
             employee: employeeData.employee,
+            tableNum,
             state: {},
           };
         } else if (userData) {
           users[userData._id] = {
             username: userData.username,
+            tableNum, 
             state: {},
           };
         }
@@ -175,6 +178,7 @@ export const wsServer = async (server) => {
       path: "orders",
       populate: {
         path: "menuItems.product",
+        match: { _id: { $ne: null }},
       },
     });
 
