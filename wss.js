@@ -119,8 +119,14 @@ export const wsServer = async (server) => {
           path: "orders",
           populate: {
             path: "menuItems.product",
-            match: { _id: { $ne: null } },
           },
+        });
+        allTables.forEach((table) => {
+          table.orders.forEach((order) => {
+            order.menuItems = order.menuItems.filter(
+              (menuItem) => menuItem.product !== null
+            );
+          });
         });
         connection.send(
           JSON.stringify({
@@ -143,7 +149,7 @@ export const wsServer = async (server) => {
       connections[uuid] = connection;
       users[uuid] = {
         username: `Guest`,
-        tableNum: tableNum ? tableNum : '',
+        tableNum: tableNum ? tableNum : "",
         state: {},
       };
       console.log(`User: ${users[uuid].username}`);
