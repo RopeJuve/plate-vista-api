@@ -21,12 +21,13 @@ export const createOrderAction = async (payload, broadcast, user, tableNum) => {
     await order.populate("menuItems.product");
     const tableOrders = await Table.findOne({ tableNumber: tableNum });
     tableOrders.orders.push(order._id);
+    tableOrders.status = "occupied";
     await tableOrders.save();
     await tableOrders.populate({
-      path: 'orders',
+      path: "orders",
       populate: {
-        path: 'menuItems.product'
-      }
+        path: "menuItems.product",
+      },
     });
     console.log(order);
     user.state = order;
@@ -70,11 +71,11 @@ export const changeStatusAction = async (
     await orderUpdate.populate("menuItems.product");
     const tableOrders = await Table.findOne({ tableNumber: tableNum });
     await tableOrders.populate({
-      path: 'orders',
+      path: "orders",
       populate: {
-        path: 'menuItems.product',
+        path: "menuItems.product",
         match: { _id: { $ne: null } },
-      }
+      },
     });
     user.state = {
       orderStatus: orderUpdate.orderStatus,
