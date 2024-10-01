@@ -18,18 +18,16 @@ let users = {};
 const broadcast = async (tableNum, payload) => {
   console.log(Object.keys(connections));
   Object.keys(connections).forEach((id) => {
-    if (users[id].tableNum === tableNum) {
-      const connection = connections[id];
-      console.log(`connection from broadcast: ${connection}`);
-      connection.send(
-        JSON.stringify({
-          type: "orderSuccess",
-          tableNum,
-          payload,
-          user: users[id],
-        })
-      );
-    }
+    const connection = connections[id];
+    console.log(`connection from broadcast: ${connection}`);
+    connection.send(
+      JSON.stringify({
+        type: "orderSuccess",
+        tableNum,
+        payload,
+        user: users[id],
+      })
+    );
   });
   const allTables = await Table.find().populate({
     path: "orders",
