@@ -12,12 +12,13 @@ import {
 } from "./actions/orderActions.js";
 
 let connections = {};
+let monitoringConnections = {};
 let users = {};
 
-const broadcast = (tableNum, payload) => {
+const broadcast = async (tableNum, payload) => {
   console.log(Object.keys(connections));
   Object.keys(connections).forEach((id) => {
-    if (users[id].tableNum === tableNum) { 
+    if (users[id].tableNum === tableNum) {
       const connection = connections[id];
       console.log(`connection from broadcast: ${connection}`);
       connection.send(
@@ -29,6 +30,22 @@ const broadcast = (tableNum, payload) => {
         })
       );
     }
+  });
+  const allTables = await Table.find().populate({
+    path: "orders",
+    populate: {
+      path: "menuItems.product",
+      match: { _id: { $ne: null } },
+    },
+  });
+  Object.keys(monitoringConnections).forEach((id) => {
+    const connection = monitoringConnections[id];
+    connection.send(
+      JSON.stringify({
+        type: "allTables",
+        payload: allTables,
+      })
+    );
   });
 };
 
@@ -73,27 +90,11 @@ const handleMessages = async (bytes, tableNum, userId, uuid) => {
 };
 
 const handleClose = (tableNum, uuid, userId) => {
-  let connectionRemoved = false;
-
-  if (uuid && connections[uuid]) {
-    delete connections[uuid];
-    delete users[uuid];
-    connectionRemoved = true;
-    console.log(`Connection with UUID: ${uuid} has been removed.`);
-  }
-
-  if (userId && connections[userId]) {
-    delete connections[userId];
-    delete users[userId];
-    connectionRemoved = true;
-    console.log(`Connection with User ID: ${userId} has been removed.`);
-  }
-
-  if (connectionRemoved) {
-    broadcast(tableNum, { type: "close" });
-  } else {
-    console.log(`No connections found for UUID: ${uuid} or User ID: ${userId}`);
-  }
+  delete connections[userId || uuid];
+  delete users[userId || uuid];
+  console.log(tableNum);
+  console.log(`User: ${users[userId || uuid]} has disconnected`);
+  console.log(`connection: ${connections[userId || uuid]} has disconnected`);
 };
 
 export const wsServer = async (server) => {
@@ -114,6 +115,7 @@ export const wsServer = async (server) => {
 
     if (!tableNum) {
       console.log("Connected without table number");
+      monitoringConnections[uuid] = connection;
       try {
         const allTables = await Table.find().populate({
           path: "orders",
@@ -164,7 +166,7 @@ export const wsServer = async (server) => {
         } else if (userData) {
           users[userData._id] = {
             username: userData.username,
-            tableNum, 
+            tableNum,
             state: {},
           };
         }
@@ -178,7 +180,7 @@ export const wsServer = async (server) => {
       path: "orders",
       populate: {
         path: "menuItems.product",
-        match: { _id: { $ne: null }},
+        match: { _id: { $ne: null } },
       },
     });
 
@@ -187,7 +189,15 @@ export const wsServer = async (server) => {
       await handleMessages(message, tableNum, userId, uuid);
     });
 
-    connection.on("close", () => handleClose(tableNum, uuid, userId));
+    connection.on("close", () => {
+      if (monitoringConnections[uuid]) {
+        delete monitoringConnections[uuid];
+        console.log(
+          `Monitoring connection with UUID: ${uuid} has been removed.`
+        );
+      }
+      handleClose(tableNum, uuid, userId);
+    });
     return wss;
   });
 };
