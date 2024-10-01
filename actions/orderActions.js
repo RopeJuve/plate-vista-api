@@ -72,7 +72,8 @@ export const changeStatusAction = async (
     await tableOrders.populate({
       path: 'orders',
       populate: {
-        path: 'menuItems.product'
+        path: 'menuItems.product',
+        match: { _id: { $ne: null } },
       }
     });
     user.state = {

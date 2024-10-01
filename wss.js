@@ -110,6 +110,11 @@ export const wsServer = async (server) => {
     console.log("Client connected");
     const uuid = uuidv4();
     const { tableNum, userId } = url.parse(request.url, true).query;
+    if (!tableNum || isNaN(tableNum)) {
+      console.log(`Invalid tableNum: ${tableNum}`);
+      tableNum = null; 
+      tableNum = Number(tableNum); 
+    }
 
     if (!tableNum) {
       console.log("Connected without table number");
