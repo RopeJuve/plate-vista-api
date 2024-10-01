@@ -17,16 +17,18 @@ let users = {};
 const broadcast = (tableNum, payload) => {
   console.log(Object.keys(connections));
   Object.keys(connections).forEach((id) => {
-    const connection = connections[id];
-    console.log(`connection from broadcast: ${connection}`);
-    connection.send(
-      JSON.stringify({
-        type: "orderSuccess",
-        tableNum,
-        payload,
-        user: users[id],
-      })
-    );
+    if (users[id].tableNum === tableNum) { 
+      const connection = connections[id];
+      console.log(`connection from broadcast: ${connection}`);
+      connection.send(
+        JSON.stringify({
+          type: "orderSuccess",
+          tableNum,
+          payload,
+          user: users[id],
+        })
+      );
+    }
   });
 };
 
@@ -61,14 +63,12 @@ const handleMessages = async (bytes, tableNum, userId, uuid) => {
     }
   } catch (err) {
     console.log(err);
-    Object.keys(connections).forEach((id) => {
-      connections[id].send(
-        JSON.stringify({
-          type: "error",
-          payload: "Invalid request",
-        })
-      );
-    });
+    connections[uuid || userId].send(
+      JSON.stringify({
+        type: "error",
+        payload: "Invalid request",
+      })
+    );
   }
 };
 
@@ -112,7 +112,34 @@ export const wsServer = async (server) => {
     const uuid = uuidv4();
     const { tableNum, userId } = url.parse(request.url, true).query;
 
-    if (!userId && userId === "") {
+    if (!tableNum) {
+      console.log("Connected without table number");
+      try {
+        const allTables = await Table.find().populate({
+          path: "orders",
+          populate: {
+            path: "menuItems.product",
+            match: { _id: { $ne: null } },
+          },
+        });
+        connection.send(
+          JSON.stringify({
+            type: "allTables",
+            payload: allTables,
+          })
+        );
+      } catch (error) {
+        console.error("Error fetching all tables:", error);
+        connection.send(
+          JSON.stringify({
+            type: "error",
+            payload: "Failed to fetch tables",
+          })
+        );
+      }
+    }
+
+    if (!userId) {
       connections[uuid] = connection;
       users[uuid] = {
         username: `Guest`,
@@ -145,10 +172,10 @@ export const wsServer = async (server) => {
     console.log(users);
     console.log(`Table number: ${tableNum}`);
     const table = await Table.findOne({ tableNumber: tableNum }).populate({
-      path: 'orders',
+      path: "orders",
       populate: {
-        path: 'menuItems.product'
-      }
+        path: "menuItems.product",
+      },
     });
 
     broadcast(tableNum, table);
@@ -156,7 +183,7 @@ export const wsServer = async (server) => {
       await handleMessages(message, tableNum, userId, uuid);
     });
 
-    wss.on("close", () => handleClose(tableNum, uuid, userId));
+    connection.on("close", () => handleClose(tableNum, uuid, userId));
     return wss;
   });
 };
