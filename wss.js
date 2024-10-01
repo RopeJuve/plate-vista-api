@@ -173,16 +173,18 @@ export const wsServer = async (server) => {
       }
     }
     console.log(users);
-    console.log(`Table number: ${tableNum}`);
-    const table = await Table.findOne({ tableNumber: tableNum }).populate({
-      path: "orders",
-      populate: {
-        path: "menuItems.product",
-        match: { _id: { $ne: null } },
-      },
-    });
+    if (tableNum) {
+      console.log(`Table number: ${tableNum}`);
+      const table = await Table.findOne({ tableNumber: tableNum }).populate({
+        path: "orders",
+        populate: {
+          path: "menuItems.product",
+          match: { _id: { $ne: null } },
+        },
+      });
+      broadcast(tableNum, table);
+    }
 
-    broadcast(tableNum, table);
     connection.on("message", async (message) => {
       await handleMessages(message, tableNum, userId, uuid);
     });
