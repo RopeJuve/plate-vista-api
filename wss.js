@@ -121,13 +121,6 @@ export const wsServer = async (server) => {
             path: "menuItems.product",
           },
         });
-        allTables.forEach((table) => {
-          table.orders.forEach((order) => {
-            order.menuItems = order.menuItems.filter(
-              (menuItem) => menuItem.product !== null
-            );
-          });
-        });
         connection.send(
           JSON.stringify({
             type: "allTables",
