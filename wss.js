@@ -116,7 +116,7 @@ export const wsServer = async (server) => {
       tableNum = Number(tableNum); 
     }
 
-    if (!tableNum && userId) {
+    if (!tableNum) {
       console.log("Connected without table number");
       monitoringConnections[uuid] = connection;
       try {
