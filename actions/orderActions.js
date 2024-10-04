@@ -69,7 +69,7 @@ export const changeStatusAction = async (
       { new: true }
     );
     await orderUpdate.populate("menuItems.product");
-    if(tableNum){
+    if (tableNum) {
       const tableOrders = await Table.findOne({ tableNumber: tableNum });
       await tableOrders.populate({
         path: "orders",
@@ -78,8 +78,14 @@ export const changeStatusAction = async (
           match: { _id: { $ne: null } },
         },
       });
-    }else{
-      const tableOrders = await Table.findOne({ tableNumber: payload.tableNum });
+      user.state = {
+        orderStatus: orderUpdate.orderStatus,
+      };
+      broadcast(tableNum, tableOrders);
+    } else {
+      const tableOrders = await Table.findOne({
+        tableNumber: payload.tableNum,
+      });
       await tableOrders.populate({
         path: "orders",
         populate: {
@@ -87,11 +93,11 @@ export const changeStatusAction = async (
           match: { _id: { $ne: null } },
         },
       });
+      user.state = {
+        orderStatus: orderUpdate.orderStatus,
+      };
+      broadcast(payload.tableNum, tableOrders);
     }
-    user.state = {
-      orderStatus: orderUpdate.orderStatus,
-    };
-    broadcast(tableNum, tableOrders);
   } catch (err) {
     console.log(err);
   }
