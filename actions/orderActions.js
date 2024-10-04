@@ -69,14 +69,25 @@ export const changeStatusAction = async (
       { new: true }
     );
     await orderUpdate.populate("menuItems.product");
-    const tableOrders = await Table.findOne({ tableNumber: tableNum });
-    await tableOrders.populate({
-      path: "orders",
-      populate: {
-        path: "menuItems.product",
-        match: { _id: { $ne: null } },
-      },
-    });
+    if(tableNum){
+      const tableOrders = await Table.findOne({ tableNumber: tableNum });
+      await tableOrders.populate({
+        path: "orders",
+        populate: {
+          path: "menuItems.product",
+          match: { _id: { $ne: null } },
+        },
+      });
+    }else{
+      const tableOrders = await Table.findOne({ tableNumber: payload.tableNum });
+      await tableOrders.populate({
+        path: "orders",
+        populate: {
+          path: "menuItems.product",
+          match: { _id: { $ne: null } },
+        },
+      });
+    }
     user.state = {
       orderStatus: orderUpdate.orderStatus,
     };
