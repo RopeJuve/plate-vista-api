@@ -111,7 +111,7 @@ export const wsServer = async (server) => {
     const uuid = uuidv4();
     const { tableNum, userId } = url.parse(request.url, true).query;
 
-    if (!tableNum && !userId) {
+    if (!tableNum && userId) {
       console.log("Connected without table number");
       monitoringConnections[uuid] = connection;
       try {
