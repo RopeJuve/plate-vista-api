@@ -1,7 +1,7 @@
 import { WebSocketServer } from "ws";
 import url from "url";
 import { v4 as uuidv4 } from "uuid";
-import Employee from "./models/employee.modal.js";
+import Employee from "./models/employee.model.js";
 import User from "./models/user.model.js";
 import Table from "./models/table.model.js";
 import {

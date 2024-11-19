@@ -1,4 +1,4 @@
-import Employee from "../models/employee.modal.js";
+import Employee from "../models/employee.model.js";
 import { hashPassword } from "../utils/index.js";
 import { sanitizedUser, sanitizedUsers } from "../utils/index.js";
 

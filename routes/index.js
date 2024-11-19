@@ -5,6 +5,7 @@ import orderRouter from "./orderRouter.js";
 import employeeRouter from "./employeeRouter.js";
 import tableRouter from "./tableRouter.js";
 import statisticsRouter from "./statisticsRouter.js";
+import restaurantRouter from "./restaurantRouter.js";
 export {
   authRouter,
   userRouter,
@@ -12,5 +13,6 @@ export {
   orderRouter,
   employeeRouter,
   tableRouter,
-  statisticsRouter
+  statisticsRouter,
+  restaurantRouter,
 };

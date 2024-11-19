@@ -1,4 +1,4 @@
-import Employee from "../models/employee.modal.js";
+import Employee from "../models/employee.model.js";
 
 export const checkEmployee = async (req, res, next) => {
   const { id } = req.params;

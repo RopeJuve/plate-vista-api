@@ -15,6 +15,7 @@ import {
   employeeRouter,
   tableRouter,
   statisticsRouter,
+  restaurantRouter,
 } from "./routes/index.js";
 import { wsServer } from "./wss.js";
 
@@ -47,6 +48,8 @@ employeePassport(passport);
 app.get("/", (req, res) => {
   res.send("Plate Vista API");
 });
+
+app.use('/api/v1/restaurant', restaurantRouter);
 
 app.use("/api/v1/employee", employeeRouter);
 app.use("/api/v1/users", userRouter);

@@ -1,6 +1,6 @@
 import { Strategy as LocalStrategy } from "passport-local";
 import { comparePassword } from "../utils/index.js";
-import Employee from "../models/employee.modal.js";
+import Employee from "../models/employee.model.js";
 
 export default function (passport) {
   passport.use(
