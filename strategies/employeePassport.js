@@ -9,10 +9,16 @@ export default function (passport) {
       {
         usernameField: "employee",
         passwordField: "password",
+        passReqToCallback: true,
       },
-      async (employee, password, done) => {
+      async (req, employee, password, done) => {
         try {
-          const employeeData = await Employee.findOne({ employee });
+          const { dbConnection } = req;
+          const EmployeeModel = await dbConnection.model(
+            "Employee",
+            Employee.schema
+          );
+          const employeeData = await EmployeeModel.findOne({ employee });
           if (!employeeData)
             return done(null, false, { message: "employee not found" });
           const isPasswordMatch = await comparePassword(
@@ -36,7 +42,9 @@ export default function (passport) {
 
   passport.deserializeUser(async (id, done) => {
     try {
-      const employeeData = await Employee.findById(id);
+      const { dbConnection } = req;
+      const EmployeeModel = await dbConnection.model("Employee", Employee.schema);
+      const employeeData = await EmployeeModel.findById(id);
       if (!employeeData) throw new Error("employee not found");
       done(null, employeeData);
     } catch (error) {

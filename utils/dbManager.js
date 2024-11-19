@@ -71,7 +71,6 @@ class DatabaseManager {
 
       const connection = mongoose.createConnection(restaurant.databaseUrl);
 
-      // Initialize models for this connection
       this.initModels(connection);
       this.connections.set(restaurantId, connection);
 
@@ -83,8 +82,6 @@ class DatabaseManager {
   }
 
   initModels(connection) {
-    // Reference your existing models
-
     const UserModel = connection.model("User", User.schema);
     const EmployeeModel = connection.model("Employee", Employee.schema);
     const MenuItemModel = connection.model("MenuItem", MenuItem.schema);

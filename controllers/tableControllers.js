@@ -1,8 +1,7 @@
-import Table from "../models/table.model.js";
-
 export const getTables = async (req, res) => {
   try {
-    const tables = await Table.find();
+    const { dbConnection } = req;
+    const tables = await dbConnection.model("Table").find();
     res.status(200).json(tables);
   } catch (error) {
     res.status(500).json("Internal server error");
@@ -12,8 +11,8 @@ export const getTables = async (req, res) => {
 export const createTable = async (req, res) => {
   const table = req.body;
   try {
-    const newTable = new Table(table);
-    await newTable.save();
+    const { dbConnection } = req;
+    const newTable = await dbConnection.model("Table").create(table);
     res.status(201).json(newTable);
   } catch (error) {
     res.status(500).json("Internal server error");
@@ -31,9 +30,12 @@ export const getTableById = async (req, res) => {
 export const updateTable = async (req, res) => {
   const { id } = req.params;
   try {
-    const updatedTable = await Table.findByIdAndUpdate(id, req.body, {
-      new: true,
-    });
+    const { dbConnection } = req;
+    const updatedTable = await dbConnection
+      .model("Table")
+      .findByIdAndUpdate(id, req.body, {
+        new: true,
+      });
     res.status(200).json(updatedTable);
   } catch (error) {
     res.status(500).json("Internal server error");
@@ -43,7 +45,8 @@ export const updateTable = async (req, res) => {
 export const deleteTable = async (req, res) => {
   const { id } = req.params;
   try {
-    await Table.findByIdAndRemove(id);
+    const { dbConnection } = req;
+    await dbConnection.model("Table").findByIdAndRemove(id);
     res.json({ message: "Table deleted successfully." });
   } catch (error) {
     res.status(500).json("Internal server error");

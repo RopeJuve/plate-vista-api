@@ -1,9 +1,9 @@
-import User from "../models/user.model.js";
 import { hashPassword, sanitizedUsers, sanitizedUser } from "../utils/index.js";
 
 export const getUsers = async (req, res) => {
   try {
-    const users = await User.find();
+    const { dbConnection } = req;
+    const users = await dbConnection.model("User").find();
     const usersInfo = sanitizedUsers(users);
     res.status(200).json(usersInfo);
   } catch (err) {
@@ -15,12 +15,12 @@ export const createUser = async (req, res) => {
   const { username, email, password } = req.body;
   const hashedPassword = await hashPassword(password);
   try {
-    const user = new User({
+    const { dbConnection } = req;
+    const user = await dbConnection.model("User").create({
       username,
       email,
       password: hashedPassword,
     });
-    await user.save();
     res.status(201).json(user);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -38,9 +38,12 @@ export const updateUser = async (req, res) => {
     updateBody.password = await hashPassword(updateBody.password);
   }
   try {
-    const updatedUser = await User.findByIdAndUpdate(id, updateBody, {
-      new: true,
-    });
+    const { dbConnection } = req;
+    const updatedUser = await dbConnection
+      .model("User")
+      .findByIdAndUpdate(id, updateBody, {
+        new: true,
+      });
     res.status(200).json(sanitizedUser(updatedUser));
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -50,7 +53,8 @@ export const updateUser = async (req, res) => {
 export const deleteUser = async (req, res) => {
   const { id } = req.params;
   try {
-    await User.findByIdAndDelete(id);
+    const { dbConnection } = req;
+    await dbConnection.model("User").findByIdAndDelete(id);
     res.status(200).json({ message: "User deleted successfully" });
   } catch (err) {
     res.status(500).json({ message: err.message });

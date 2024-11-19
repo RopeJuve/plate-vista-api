@@ -5,19 +5,31 @@ import User from "../models/user.model.js";
 export default function (passport) {
   passport.use(
     "user-local",
-    new LocalStrategy(async (username, password, done) => {
-      try {
-        const user = await User.findOne({ username });
-        if (!user) return done(null, false, { message: "User not found" });
-        const isPasswordMatch = await comparePassword(password, user.password);
-        if (!isPasswordMatch)
-          return done(null, false, { message: "Wrong password" });
-        done(null, user);
-      } catch (error) {
-        console.log(error, error.message);
-        done(error, null);
+    new LocalStrategy(
+      {
+        usernameField: "username",
+        passwordField: "password",
+        passReqToCallback: true,
+      },
+      async (req, username, password, done) => {
+        try {
+          const { dbConnection } = req;
+          const UserModel = await dbConnection.model("User", User.schema);
+          const user = await UserModel.findOne({ username });
+          if (!user) return done(null, false, { message: "User not found" });
+          const isPasswordMatch = await comparePassword(
+            password,
+            user.password
+          );
+          if (!isPasswordMatch)
+            return done(null, false, { message: "Wrong password" });
+          done(null, user);
+        } catch (error) {
+          console.log(error, error.message);
+          done(error, null);
+        }
       }
-    })
+    )
   );
 
   passport.serializeUser((user, done) => {
@@ -26,7 +38,9 @@ export default function (passport) {
 
   passport.deserializeUser(async (id, done) => {
     try {
-      const user = await User.findById(id);
+      const { dbConnection } = req;
+      const UserModel = await dbConnection.model("User", User.schema);
+      const user = await UserModel.findById(id);
       if (!user) throw new Error("User not found");
       done(null, user);
     } catch (error) {

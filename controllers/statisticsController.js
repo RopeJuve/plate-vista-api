@@ -1,10 +1,8 @@
-import Order from "../models/orders.model.js";
-
 export const getTotalSales = async (req, res) => {
   try {
     const { start_date, end_date } = req.query;
     const query = {};
-
+    const { dbConnection } = req;
     if (!start_date && !end_date) {
       query.createdAt = {
         $lte: new Date(new Date().setDate(new Date().getDate() + 1)),
@@ -17,10 +15,12 @@ export const getTotalSales = async (req, res) => {
       };
     }
 
-    const totalSales = await Order.aggregate([
-      { $match: query },
-      { $group: { _id: null, totalSales: { $sum: "$totalPrice" } } },
-    ]);
+    const totalSales = await dbConnection
+      .model("Order")
+      .aggregate([
+        { $match: query },
+        { $group: { _id: null, totalSales: { $sum: "$totalPrice" } } },
+      ]);
 
     res.status(200).json({ totalSales: totalSales[0]?.totalSales || 0 });
   } catch (err) {
@@ -40,7 +40,7 @@ export const getSalesByMenuItem = async (req, res) => {
       };
     }
 
-    const sales = await Order.aggregate([
+    const sales = await dbConnection.model("Order").aggregate([
       { $match: query },
       { $unwind: "$menuItems" },
       {
@@ -84,6 +84,7 @@ export const getOrdersByDate = async (req, res) => {
   try {
     const { start_date, end_date, group_by } = req.query;
     const query = {};
+    const { dbConnection } = req;
     const groupByField =
       group_by === "month"
         ? { $dateToString: { format: "%Y-%m", date: "$createdAt" } }
@@ -96,7 +97,7 @@ export const getOrdersByDate = async (req, res) => {
       };
     }
 
-    const orders = await Order.aggregate([
+    const orders = await dbConnection.model("Order").aggregate([
       { $match: query },
       {
         $group: {
@@ -117,8 +118,10 @@ export const getOrdersByDate = async (req, res) => {
 export const getUserOrdersByDate = async (req, res) => {
   try {
     const query = { user: req.params.id };
-
-    const orders = await Order.find(query)
+    const { dbConnection } = req;
+    const orders = await dbConnection
+      .model("Order")
+      .find(query)
       .sort({ createdAt: -1 })
       .populate("menuItems.product");
 
@@ -131,8 +134,8 @@ export const getUserOrdersByDate = async (req, res) => {
 export const getTopCustomers = async (req, res) => {
   try {
     const { limit } = req.query;
-
-    const topCustomers = await Order.aggregate([
+    const { dbConnection } = req;
+    const topCustomers = await dbConnection.model("Order").aggregate([
       { $group: { _id: "$user", totalPrice: { $sum: "$totalPrice" } } },
       {
         $lookup: {

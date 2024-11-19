@@ -18,6 +18,7 @@ import {
   restaurantRouter,
 } from "./routes/index.js";
 import { wsServer } from "./wss.js";
+import { connectRestaurantDb } from "./middlewares/restaurantMiddleware.js";
 
 dotenv.config();
 const app = express();
@@ -51,15 +52,15 @@ app.get("/", (req, res) => {
 
 app.use('/api/v1/restaurant', restaurantRouter);
 
-app.use("/api/v1/employee", employeeRouter);
-app.use("/api/v1/users", userRouter);
-app.use("/api/v1/auth", authRouter);
+app.use("/api/v1/employee",connectRestaurantDb, employeeRouter);
+app.use("/api/v1/users",connectRestaurantDb, userRouter);
+app.use("/api/v1/auth",connectRestaurantDb, authRouter);
 
-app.use("/api/v1/menu-items", menuItemRouter);
-app.use("/api/v1/orders", orderRouter);
-app.use("/api/v1/table", tableRouter);
+app.use("/api/v1/menu-items",connectRestaurantDb, menuItemRouter);
+app.use("/api/v1/orders",connectRestaurantDb, orderRouter);
+app.use("/api/v1/table",connectRestaurantDb, tableRouter);
 
-app.use("/api/v1/statistics", statisticsRouter);
+app.use("/api/v1/statistics",connectRestaurantDb, statisticsRouter);
 
 app.use(passport.initialize());
 app.use(passport.session());
