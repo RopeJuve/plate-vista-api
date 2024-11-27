@@ -19,6 +19,8 @@ import {
 } from "./routes/index.js";
 import { wsServer } from "./wss.js";
 import { connectRestaurantDb } from "./middlewares/restaurantMiddleware.js";
+import swaggerUi from "swagger-ui-express";
+import { specs } from "./swagger.js";
 
 dotenv.config();
 const app = express();
@@ -34,7 +36,7 @@ app.use(
   })
 );
 app.use(express.json());
-
+app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(specs));
 app.use(
   session({
     secret: process.env.SECRET,

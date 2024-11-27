@@ -17,11 +17,12 @@ export const menuItemBodyValidation = [
     .isEmpty()
     .isNumeric()
     .withMessage("Price must be a number"),
-  check("image", "Image is required")
-    .not()
-    .isEmpty()
-    .isString()
-    .withMessage("Image must be a string"),
+  check("image").custom((value, { req }) => {
+    if (!req.file && !req.body.image) {
+      throw new Error("Image is required");
+    }
+    return true;
+  }),
   check("category", "Category is required")
     .not()
     .isEmpty()
