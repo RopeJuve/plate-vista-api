@@ -1,9 +1,8 @@
-import MenuItem from "../models/menuItem.model.js";
-
 export const checkItem = async (req, res, next) => {
   const { id } = req.params;
+  const { dbConnection } = req;
   try {
-    const item = await MenuItem.findById(id);
+    const item = await dbConnection.model("MenuItem").findById(id);
     if (!item) {
       return res.status(404).json({ message: "Item not found" });
     }
@@ -15,9 +14,10 @@ export const checkItem = async (req, res, next) => {
 };
 
 export const checkBeforeCreate = async (req, res, next) => {
+  const { dbConnection } = req;
   try {
     const { title } = req.body;
-    const item = await MenuItem.findOne({
+    const item = await dbConnection.model("MenuItem").findOne({
       title,
     });
     if (item) {

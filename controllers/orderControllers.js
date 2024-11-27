@@ -1,11 +1,13 @@
-
 import { updatedOrder, calculateTotal } from "../utils/index.js";
 
 export const createOrder = async (req, res) => {
   try {
     const { user, menuItems } = req.body;
     const { dbConnection } = req;
-    const totalPrice = await calculateTotal(menuItems, dbConnection.model("MenuItem"));
+    const totalPrice = await calculateTotal(
+      menuItems,
+      dbConnection.model("MenuItem")
+    );
     if (totalPrice === 0) {
       return res.status(404).json({ message: "MenuItem not found" });
     }
@@ -24,7 +26,9 @@ export const createOrder = async (req, res) => {
 export const getOrders = async (req, res) => {
   try {
     const { dbConnection } = req;
-    const orders = await dbConnection.model("Order").find()
+    const orders = await dbConnection
+      .model("Order")
+      .find()
       .populate("user")
       .populate("menuItems.product")
       .exec();
@@ -43,7 +47,11 @@ export const updateOrder = async (req, res) => {
   try {
     const { order } = req;
     const { dbConnection } = req;
-    const newOrder = await updatedOrder(order, req.body, dbConnection.model("MenuItem"));
+    const newOrder = await updatedOrder(
+      order,
+      req.body,
+      dbConnection.model("MenuItem")
+    );
     res.status(200).json(newOrder);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -59,14 +67,24 @@ export const updateOrderStatus = async (req, res) => {
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
-}
+};
 
 export const deleteOrder = async (req, res) => {
   try {
     const { dbConnection } = req;
-      await dbConnection.model("Order").findByIdAndDelete(req.order._id);
+    await dbConnection.model("Order").findByIdAndDelete(req.order._id);
     res.status(200).json({ message: "Order deleted successfully" });
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+};
+
+export const deleteAllOrders = async (req, res) => {
+  try {
+    const { dbConnection } = req;
+    await dbConnection.model("Order").deleteMany();
+    return res.status(200).json({ message: "All Orders deleted successfully" });
+  } catch (error) {
+    return res.status(500).send(error.message);
   }
 };

@@ -1,9 +1,10 @@
-import Order from "../models/orders.model.js";
-
 export const checkOrderExists = async (req, res, next) => {
   const { id } = req.params;
+  const { dbConnection } = req;
   try {
-    const order = await Order.findById(id)
+    const order = await dbConnection
+      .model("Order")
+      .findById(id)
       .populate("user")
       .populate("menuItems.product")
       .exec();

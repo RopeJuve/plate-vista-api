@@ -1,5 +1,4 @@
 import mongoose from "mongoose";
-import User from "../models/user.model.js";
 
 export const checkId = (req, res, next) => {
   const { id } = req.params;
@@ -11,8 +10,9 @@ export const checkId = (req, res, next) => {
 
 export const checkUser = async (req, res, next) => {
   const { id } = req.params;
+  const { dbConnection } = req;
   try {
-    const user = await User.findById(id);
+    const user = await dbConnection.model("User").findById(id);
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
@@ -24,12 +24,13 @@ export const checkUser = async (req, res, next) => {
 };
 
 export const checkBeforeCreate = async (req, res, next) => {
+  const { dbConnection } = req;
   try {
     const { username, email } = req.body;
-    const user = await User.findOne({
+    const user = await dbConnection.model("User").findOne({
       username,
     });
-    const userEmail = await User.findOne({ email });
+    const userEmail = await dbConnection.model("User").findOne({ email });
     if (user || userEmail) {
       return res.status(409).json({ message: "User already exists" });
     }

@@ -6,6 +6,7 @@ import {
   updateMenuItem,
   deleteMenuItem,
   getAllCategory,
+  deleteAllMenuItems,
 } from "../controllers/menuItemControllers.js";
 import {
   menuItemBodyValidation,
@@ -36,5 +37,6 @@ menuItemRouter.put(
   updateMenuItem
 );
 menuItemRouter.delete("/:id", checkId, checkItem, deleteMenuItem);
+menuItemRouter.delete("/", deleteAllMenuItems);
 
 export default menuItemRouter;

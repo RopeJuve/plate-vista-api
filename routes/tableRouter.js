@@ -6,6 +6,7 @@ import {
   updateTable,
   deleteTable,
   getTableById,
+  deleteAllTables,
 } from "../controllers/tableControllers.js";
 import {
   tableBodyValidator,
@@ -24,5 +25,6 @@ tableRouter.post("/", tableBodyValidator, checkBeforeCreateTable, createTable);
 tableRouter.get("/:id", checkId, checkTable, getTableById);
 tableRouter.put("/:id", checkId, checkTable, tableUpdateValidator, updateTable);
 tableRouter.delete("/:id", checkId, deleteTable);
+tableRouter.delete("/", deleteAllTables);
 
 export default tableRouter;

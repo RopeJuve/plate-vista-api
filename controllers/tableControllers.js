@@ -52,3 +52,13 @@ export const deleteTable = async (req, res) => {
     res.status(500).json("Internal server error");
   }
 };
+
+export const deleteAllTables = async (req, res) => {
+  try {
+    const { dbConnection } = req;
+    await dbConnection.model("Table").deleteMany();
+    return res.status(200).json({ message: "All Tables deleted successfully" });
+  } catch (error) {
+    return res.status(500).send(error.message);
+  }
+};

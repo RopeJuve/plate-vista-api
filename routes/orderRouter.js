@@ -1,6 +1,7 @@
 import express from "express";
 import {
   createOrder,
+  deleteAllOrders,
   deleteOrder,
   getOrder,
   getOrders,
@@ -20,5 +21,6 @@ orderRouter.get("/:id", checkId, checkOrderExists, getOrder);
 orderRouter.put("/:id", checkId, checkOrderExists, updateOrder);
 orderRouter.put("/:id/status", checkId, checkOrderExists, updateOrderStatus);
 orderRouter.delete("/:id", checkId, checkOrderExists, deleteOrder);
+orderRouter.delete("/", deleteAllOrders);
 
 export default orderRouter;

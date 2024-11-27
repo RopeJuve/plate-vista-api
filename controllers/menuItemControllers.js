@@ -64,3 +64,13 @@ export const deleteMenuItem = async (req, res) => {
     return res.status(500).send(error.message);
   }
 };
+
+export const deleteAllMenuItems = async (req, res) => {
+  try {
+    const { dbConnection } = req;
+    await dbConnection.model("MenuItem").deleteMany();
+    return res.status(200).json({ message: "All MenuItems deleted successfully" });
+  } catch (error) {
+    return res.status(500).send(error.message);
+  }
+};

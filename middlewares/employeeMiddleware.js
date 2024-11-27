@@ -1,9 +1,8 @@
-import Employee from "../models/employee.model.js";
-
 export const checkEmployee = async (req, res, next) => {
   const { id } = req.params;
+  const { dbConnection } = req;
   try {
-    const employee = await Employee.findById(id);
+    const employee = await dbConnection.model("Employee").findById(id);
     if (!employee) {
       return res.status(404).json({ message: "Employee not found" });
     }
@@ -15,9 +14,10 @@ export const checkEmployee = async (req, res, next) => {
 };
 
 export const checkBeforeCreate = async (req, res, next) => {
+  const { dbConnection } = req;
   try {
     const { employee } = req.body;
-    const employeeName = await Employee.findOne({
+    const employeeName = await dbConnection.model("Employee").findOne({
       employee,
     });
 

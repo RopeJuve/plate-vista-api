@@ -1,9 +1,7 @@
 import { WebSocketServer } from "ws";
+import { dbManager } from "./utils/dbManager.js";
 import url from "url";
 import { v4 as uuidv4 } from "uuid";
-import Employee from "./models/employee.model.js";
-import User from "./models/user.model.js";
-import Table from "./models/table.model.js";
 import {
   createOrderAction,
   updateOrderAction,
@@ -15,8 +13,9 @@ let connections = {};
 let monitoringConnections = {};
 let users = {};
 
-const broadcast = async (tableNum, payload) => {
+const broadcast = async (tableNum, payload, dbConnection) => {
   console.log(Object.keys(connections));
+
   Object.keys(connections).forEach((id) => {
     const connection = connections[id];
     console.log(`connection from broadcast: ${connection}`);
@@ -29,13 +28,16 @@ const broadcast = async (tableNum, payload) => {
       })
     );
   });
-  const allTables = await Table.find().populate({
-    path: "orders",
-    populate: {
-      path: "menuItems.product",
-      match: { _id: { $ne: null } },
-    },
-  });
+  const allTables = await dbConnection
+    .model("Table")
+    .find()
+    .populate({
+      path: "orders",
+      populate: {
+        path: "menuItems.product",
+        match: { _id: { $ne: null } },
+      },
+    });
   Object.keys(monitoringConnections).forEach((id) => {
     const connection = monitoringConnections[id];
     connection.send(
@@ -47,7 +49,7 @@ const broadcast = async (tableNum, payload) => {
   });
 };
 
-const handleMessages = async (bytes, tableNum, userId, uuid) => {
+const handleMessages = async (bytes, tableNum, userId, uuid, dbConnection) => {
   try {
     const message = JSON.parse(bytes.toString());
     const user = users[userId] ? users[userId] : users[uuid];
@@ -55,24 +57,49 @@ const handleMessages = async (bytes, tableNum, userId, uuid) => {
 
     switch (message.type) {
       case "newOrder":
-        await createOrderAction(message.payload, broadcast, user, tableNum);
+        await createOrderAction(
+          message.payload,
+          broadcast,
+          user,
+          tableNum,
+          dbConnection
+        );
         break;
       case "updateOrder":
-        await updateOrderAction(message.payload, broadcast, user, tableNum);
+        await updateOrderAction(
+          message.payload,
+          broadcast,
+          user,
+          tableNum,
+          dbConnection
+        );
         break;
       case "changeStatus":
-        await changeStatusAction(message.payload, broadcast, user, tableNum);
+        await changeStatusAction(
+          message.payload,
+          broadcast,
+          user,
+          tableNum,
+          dbConnection
+        );
         break;
       case "completeOrder":
         await changeStatusAction(
           { orderId: message.payload.orderId, status: "Completed" },
           broadcast,
           user,
-          tableNum
+          tableNum,
+          dbConnection
         );
         break;
       case "deleteOrder":
-        await deleteOrderAction(message.payload, broadcast, user, tableNum);
+        await deleteOrderAction(
+          message.payload,
+          broadcast,
+          user,
+          tableNum,
+          dbConnection
+        );
       default:
         break;
     }
@@ -109,18 +136,25 @@ export const wsServer = async (server) => {
   wss.on("connection", async (connection, request) => {
     console.log("Client connected");
     const uuid = uuidv4();
-    const { tableNum, userId } = url.parse(request.url, true).query;
-
+    const { restaurantId, tableNum, userId } = url.parse(
+      request.url,
+      true
+    ).query;
+    console.log(restaurantId, tableNum, userId);
+    const dbConnection = await dbManager.connectToRestaurantDB(restaurantId);
     if (!tableNum && userId) {
       console.log("Connected without table number");
       monitoringConnections[uuid] = connection;
       try {
-        const allTables = await Table.find().populate({
-          path: "orders",
-          populate: {
-            path: "menuItems.product",
-          },
-        });
+        const allTables = await dbConnection
+          .model("Table")
+          .find()
+          .populate({
+            path: "orders",
+            populate: {
+              path: "menuItems.product",
+            },
+          });
         connection.send(
           JSON.stringify({
             type: "allTables",
@@ -151,8 +185,10 @@ export const wsServer = async (server) => {
       connections[userId] = connection;
       console.log(`connection: ${connections[userId]}`);
       try {
-        const userData = await User.findById(userId);
-        const employeeData = await Employee.findById(userId);
+        const userData = await dbConnection.model("User").findById(userId);
+        const employeeData = await dbConnection
+          .model("Employee")
+          .findById(userId);
 
         if (!userData && employeeData) {
           users[employeeData._id] = {
@@ -174,18 +210,20 @@ export const wsServer = async (server) => {
     console.log(users);
     if (tableNum) {
       console.log(`Table number: ${tableNum}`);
-      const table = await Table.findOne({ tableNumber: tableNum }).populate({
-        path: "orders",
-        populate: {
-          path: "menuItems.product",
-          match: { _id: { $ne: null } },
-        },
-      });
-      broadcast(tableNum, table);
+      const table = await dbConnection
+        .model("Table")
+        .findOne({
+          tableNumber: tableNum,
+        })
+        .populate({
+          path: "orders",
+          populate: { path: "menuItems.product" },
+        });
+      broadcast(tableNum, table, dbConnection);
     }
 
     connection.on("message", async (message) => {
-      await handleMessages(message, tableNum, userId, uuid);
+      await handleMessages(message, tableNum, userId, uuid, dbConnection);
     });
 
     connection.on("close", () => {
