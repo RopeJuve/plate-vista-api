@@ -56,6 +56,10 @@ export const updateMenuItem = async (req, res) => {
       ...req.body,
       image: req.file ? req.file.path : req.item.image,
     };
+    if (req.file) {
+      const publicId = req.item.image.split("/").pop().split(".")[0];
+      await cloudinary.uploader.destroy(`plate-vista-menu-items/${publicId}`);
+    }
     const menuItem = await dbConnection
       .model("MenuItem")
       .findByIdAndUpdate(id, updateData, {
