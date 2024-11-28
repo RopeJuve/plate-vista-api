@@ -23,3 +23,44 @@ authRouter.post(
 );
 
 export default authRouter;
+
+/**
+ * @swagger
+ * /auth/login:
+ *   post:
+ *     summary: Login user
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               email: { type: string }
+ *               password: { type: string }
+ *     responses:
+ *       200:
+ *         description: Login successful
+ *         headers:
+ *           authorization:
+ *             schema:
+ *               type: string
+ *       401:
+ *         description: Invalid credentials
+ * 
+ * /auth/employee/login:
+ *   post:
+ *     summary: Login employee
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               email: { type: string }
+ *               password: { type: string }
+ *     responses:
+ *       200:
+ *         description: Login successful
+ */

@@ -28,3 +28,73 @@ tableRouter.delete("/:id", checkId, deleteTable);
 tableRouter.delete("/", deleteAllTables);
 
 export default tableRouter;
+
+/**
+ * @swagger
+ * /table:
+ *   get:
+ *     summary: Get all tables
+ *     responses:
+ *       200:
+ *         description: List of tables
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 $ref: '#/components/schemas/Table'
+ * 
+ *   post:
+ *     summary: Create a new table
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/Table'
+ *     responses:
+ *       201:
+ *         description: Table created successfully
+ * 
+ * /table/{id}:
+ *   get:
+ *     summary: Get table by ID
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Table details
+ * 
+ *   put:
+ *     summary: Update table
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/Table'
+ *     responses:
+ *       200:
+ *         description: Table updated successfully
+ * 
+ *   delete:
+ *     summary: Delete table
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Table deleted successfully
+ */
