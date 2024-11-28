@@ -40,12 +40,11 @@ export const sanitizedUser = (user) => {
   return rest;
 };
 
-export const calculateTotal = async (items, dbConnection) => {
+export const calculateTotal = async (items, model) => {
   let total = currency(0);
   await Promise.all(
     items.map(async (item) => {
-      console.log(item)
-      const menuItem = await dbConnection.model("MenuItem").findById(item.product);
+      const menuItem = await model.findById(item.product);
       if (!menuItem) {
         throw currency(0).value;
       }
@@ -60,17 +59,17 @@ export const calculateTotal = async (items, dbConnection) => {
   return total.value;
 };
 
-export const populateMenuItem = async (items, dbConnection) => {
+export const populateMenuItem = async (items, MenuItem) => {
   return await Promise.all(
     items.map(async (item) => {
-      const menuItem = await dbConnection.model("MenuItem").findById(item.product);
+      const menuItem = await MenuItem.findById(item.product);
       return { product: menuItem, quantity: item.quantity };
     })
   );
 };
 
-export const updatedOrder = async (order, reqBody, dbConnection) => {
-  const newTotalPrice = await calculateTotal(reqBody.menuItems, dbConnection);
+export const updatedOrder = async (order, reqBody, MenuItem) => {
+  const newTotalPrice = await calculateTotal(reqBody.menuItems, MenuItem);
   if (newTotalPrice === 0) {
     return res.status(404).json({ message: "MenuItem not found" });
   }
