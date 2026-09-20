@@ -17,6 +17,9 @@ export const checkEmployee = async (req, res, next) => {
 export const checkBeforeCreate = async (req, res, next) => {
   try {
     const { employee } = req.body;
+    if (typeof employee !== "string") {
+      return res.status(400).json({ message: "Invalid employee name" });
+    }
     const employeeName = await Employee.findOne({
       employee,
     });

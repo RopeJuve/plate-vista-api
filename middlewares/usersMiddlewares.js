@@ -26,6 +26,9 @@ export const checkUser = async (req, res, next) => {
 export const checkBeforeCreate = async (req, res, next) => {
   try {
     const { username, email } = req.body;
+    if (typeof username !== "string" || typeof email !== "string") {
+      return res.status(400).json({ message: "Invalid username or email" });
+    }
     const user = await User.findOne({
       username,
     });

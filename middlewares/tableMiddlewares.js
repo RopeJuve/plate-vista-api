@@ -18,6 +18,10 @@ export const checkTable = async (req, res, next) => {
 export const checkBeforeCreateTable = async (req, res, next) => {
   const { tableNumber } = req.body;
 
+  if (typeof tableNumber !== "number" && typeof tableNumber !== "string") {
+    return res.status(400).json({ message: "Invalid table number" });
+  }
+
   try {
     const table = await Table.findOne({ tableNumber });
     if (table) {

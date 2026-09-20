@@ -17,6 +17,9 @@ export const checkItem = async (req, res, next) => {
 export const checkBeforeCreate = async (req, res, next) => {
   try {
     const { title } = req.body;
+    if (typeof title !== "string") {
+      return res.status(400).json({ message: "Invalid title" });
+    }
     const item = await MenuItem.findOne({
       title,
     });

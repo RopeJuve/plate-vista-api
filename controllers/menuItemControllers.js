@@ -14,7 +14,10 @@ const MENU_ITEM_FIELDS = [
 export const getMenuItems = async (req, res) => {
   try {
     const { category } = req.query;
-    if (category) {
+    if (category !== undefined) {
+      if (typeof category !== "string") {
+        return res.status(400).json({ error: "category must be a string" });
+      }
       const menuItems = await MenuItem.find({ category });
       return res.status(200).json(menuItems);
     }

@@ -12,6 +12,9 @@ export default function (passport) {
       },
       async (employee, password, done) => {
         try {
+          if (typeof employee !== "string" || typeof password !== "string") {
+            return done(null, false, { message: "Invalid credentials" });
+          }
           const employeeData = await Employee.findOne({ employee }).select(
             "+password"
           );
