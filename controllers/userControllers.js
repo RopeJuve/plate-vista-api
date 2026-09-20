@@ -4,13 +4,17 @@ import {
   sanitizedUsers,
   sanitizedUser,
   pick,
+  parsePagination,
 } from "../utils/index.js";
 
 export const getUsers = async (req, res) => {
   try {
-    const users = await User.find();
-    const usersInfo = sanitizedUsers(users);
-    res.status(200).json(usersInfo);
+    const { page, limit, skip } = parsePagination(req.query);
+    const [users, total] = await Promise.all([
+      User.find().skip(skip).limit(limit),
+      User.countDocuments(),
+    ]);
+    res.status(200).json({ users: sanitizedUsers(users), page, limit, total });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

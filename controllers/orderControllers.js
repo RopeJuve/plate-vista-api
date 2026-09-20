@@ -5,6 +5,7 @@ import {
   updatedOrder,
   calculateTotal,
   incrementSoldCounts,
+  parsePagination,
   OrderError,
 } from "../utils/index.js";
 
@@ -34,12 +35,18 @@ export const createOrder = async (req, res) => {
 
 export const getOrders = async (req, res) => {
   try {
-    const orders = await Order.find()
-      .populate("user", "username")
-      .populate("menuItems.product")
-      .exec();
+    const { page, limit, skip } = parsePagination(req.query);
+    const [orders, total] = await Promise.all([
+      Order.find()
+        .populate("user", "username")
+        .populate("menuItems.product")
+        .skip(skip)
+        .limit(limit)
+        .exec(),
+      Order.countDocuments(),
+    ]);
 
-    res.status(200).json(orders);
+    res.status(200).json({ orders, page, limit, total });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
