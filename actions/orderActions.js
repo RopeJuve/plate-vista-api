@@ -1,115 +1,154 @@
 import MenuItem from "../models/menuItem.model.js";
 import Order from "../models/orders.model.js";
 import Table from "../models/table.model.js";
-import {
-  calculateTotal,
-  populateMenuItem,
-  updatedOrder,
-} from "../utils/index.js";
+import { ORDER_STATUSES } from "../utils/orderStatuses.js";
+import { calculateTotal, updatedOrder } from "../utils/index.js";
 
-export const createOrderAction = async (payload, broadcast, user, tableNum) => {
+const sendError = (connection, message) => {
+  if (connection && connection.readyState === connection.OPEN) {
+    connection.send(JSON.stringify({ type: "error", payload: message }));
+  }
+};
+
+const orderBelongsToTable = async (orderId, tableNum) => {
+  const table = await Table.findOne({ tableNumber: tableNum });
+  if (!table) return false;
+  return table.orders.some((id) => id.toString() === orderId);
+};
+
+export const createOrderAction = async (
+  payload,
+  broadcast,
+  identity,
+  tableNum,
+  connection
+) => {
   try {
-    const { menuItems } = payload;
-    console.log(payload.user);
+    const { menuItems } = payload || {};
+    if (!Array.isArray(menuItems) || menuItems.length === 0) {
+      return sendError(connection, "menuItems is required");
+    }
+
+    const table = await Table.findOne({ tableNumber: tableNum });
+    if (!table) {
+      return sendError(connection, "Table not found");
+    }
+
     const totalPrice = await calculateTotal(menuItems, MenuItem);
     const order = new Order({
-      user: payload.user || null,
+      user: identity?.userId || null,
       menuItems,
       totalPrice,
     });
     await order.save();
     await order.populate("menuItems.product");
-    const tableOrders = await Table.findOne({ tableNumber: tableNum });
-    tableOrders.orders.push(order._id);
-    tableOrders.status = "occupied";
-    await tableOrders.save();
-    await tableOrders.populate({
+
+    table.orders.push(order._id);
+    table.status = "occupied";
+    await table.save();
+    await table.populate({
       path: "orders",
-      populate: {
-        path: "menuItems.product",
-      },
+      populate: { path: "menuItems.product" },
     });
-    console.log(order);
-    user.state = order;
-    broadcast(tableNum, tableOrders);
+
+    broadcast(tableNum, table);
   } catch (err) {
-    console.log(err);
+    console.error(err);
+    sendError(connection, "Failed to create order");
   }
 };
 
-export const updateOrderAction = async (payload, broadcast, user, tableNum) => {
+export const updateOrderAction = async (
+  payload,
+  broadcast,
+  identity,
+  tableNum,
+  connection,
+  role
+) => {
   try {
-    const { orderId, menuItems } = payload;
+    const { orderId, menuItems } = payload || {};
+    if (!orderId || !Array.isArray(menuItems) || menuItems.length === 0) {
+      return sendError(connection, "orderId and menuItems are required");
+    }
+
+    if (role !== "employee" && !(await orderBelongsToTable(orderId, tableNum))) {
+      return sendError(connection, "Order does not belong to this table");
+    }
+
     const orderUpdate = await Order.findById(orderId);
+    if (!orderUpdate) {
+      return sendError(connection, "Order not found");
+    }
+
     const upO = await updatedOrder(orderUpdate, { menuItems }, MenuItem);
     await upO.populate("menuItems.product");
-    const items = await populateMenuItem(menuItems, MenuItem);
-    user.state = {
-      menuItems: items,
-    };
     broadcast(tableNum, upO);
   } catch (err) {
-    console.log(err);
+    console.error(err);
+    sendError(connection, "Failed to update order");
   }
 };
 
 export const changeStatusAction = async (
   payload,
   broadcast,
-  user,
-  tableNum
+  identity,
+  tableNum,
+  connection
 ) => {
   try {
-    const { orderId, status } = payload;
+    const { orderId, status } = payload || {};
+    if (!ORDER_STATUSES.includes(status)) {
+      return sendError(connection, "Invalid order status");
+    }
+
     const orderUpdate = await Order.findByIdAndUpdate(
       orderId,
-      {
-        orderStatus: status,
-      },
-      { new: true }
+      { orderStatus: status },
+      { new: true, runValidators: true }
     );
-    await orderUpdate.populate("menuItems.product");
-    if (tableNum) {
-      const tableOrders = await Table.findOne({ tableNumber: tableNum });
-      await tableOrders.populate({
-        path: "orders",
-        populate: {
-          path: "menuItems.product",
-          match: { _id: { $ne: null } },
-        },
-      });
-      user.state = {
-        orderStatus: orderUpdate.orderStatus,
-      };
-      broadcast(tableNum, tableOrders);
-    } else {
-      const tableOrders = await Table.findOne({
-        tableNumber: payload.tableNum,
-      });
-      await tableOrders.populate({
-        path: "orders",
-        populate: {
-          path: "menuItems.product",
-          match: { _id: { $ne: null } },
-        },
-      });
-      user.state = {
-        orderStatus: orderUpdate.orderStatus,
-      };
-      broadcast(payload.tableNum, tableOrders);
+    if (!orderUpdate) {
+      return sendError(connection, "Order not found");
     }
+    await orderUpdate.populate("menuItems.product");
+
+    const targetTableNum = tableNum || payload.tableNum;
+    if (!targetTableNum) {
+      return sendError(connection, "tableNum is required");
+    }
+    const tableOrders = await Table.findOne({ tableNumber: targetTableNum });
+    if (!tableOrders) {
+      return sendError(connection, "Table not found");
+    }
+    await tableOrders.populate({
+      path: "orders",
+      populate: { path: "menuItems.product", match: { _id: { $ne: null } } },
+    });
+    broadcast(targetTableNum, tableOrders);
   } catch (err) {
-    console.log(err);
+    console.error(err);
+    sendError(connection, "Failed to change order status");
   }
 };
 
-export const deleteOrderAction = async (payload, broadcast, user, tableNum) => {
+export const deleteOrderAction = async (
+  payload,
+  broadcast,
+  identity,
+  tableNum,
+  connection
+) => {
   try {
-    const { orderId } = payload;
-    await Order.findByIdAndDelete(orderId);
-    user.state = {};
+    const { orderId } = payload || {};
+    const deleted = await Order.findByIdAndDelete(orderId);
+    if (!deleted) {
+      return sendError(connection, "Order not found");
+    }
+    await Table.updateMany({}, { $pull: { orders: orderId } });
     broadcast(tableNum);
   } catch (err) {
-    console.log(err);
+    console.error(err);
+    sendError(connection, "Failed to delete order");
   }
 };

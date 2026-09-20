@@ -27,6 +27,19 @@ export const generateToken = (user) => {
 export const verifyToken = (token) => {
   return jwt.verify(token, process.env.JWT_SECRET, { algorithms: ["HS256"] });
 };
+
+// Short-lived token that scopes a WebSocket connection to a single table,
+// for guests (and optionally an identified logged-in user) ordering at
+// that table. Never trust a client-supplied tableNum outside this token.
+export const generateTableToken = (tableNum, user) => {
+  const payload = user
+    ? { role: "guest", tableNum: String(tableNum), userId: user._id }
+    : { role: "guest", tableNum: String(tableNum) };
+  return jwt.sign(payload, process.env.JWT_SECRET, {
+    algorithm: "HS256",
+    expiresIn: "4h",
+  });
+};
 export const sanitizedUsers = (users) => {
   return users.map((user) => {
     const { password, __v, ...rest } = user._doc;
