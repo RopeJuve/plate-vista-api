@@ -68,10 +68,16 @@ app.use("/api/v1/table", tableRouter);
 app.use("/api/v1/statistics", statisticsRouter);
 
 await connectToDatabase();
-const s = app.listen(PORT, () => {
-  console.log(`Server is running on http://localhost:${PORT}`);
-});
 
-wsServer(s);
+// Vercel serverless functions invoke this module per-request and don't
+// support a long-lived `ws` server or app.listen(); the WebSocket feature
+// (and this app in general) needs a persistent Node host (Railway, Render,
+// Fly.io, etc). Only bind a real listener outside that environment.
+if (!process.env.VERCEL) {
+  const s = app.listen(PORT, () => {
+    console.log(`Server is running on http://localhost:${PORT}`);
+  });
+  wsServer(s);
+}
 
 export default app;
