@@ -1,5 +1,5 @@
 import Employee from "../models/employee.modal.js";
-import { hashPassword } from "../utils/index.js";
+import { hashPassword, pick } from "../utils/index.js";
 import { sanitizedUser, sanitizedUsers } from "../utils/index.js";
 
 export const getEmployees = async (req, res) => {
@@ -38,9 +38,23 @@ export const createEmployee = async (req, res) => {
 
 export const updateEmployee = async (req, res) => {
   try {
-    const employee = await Employee.findByIdAndUpdate(req.params.id, req.body, {
-      new: true,
-    });
+    const updateBody = pick(req.body, [
+      "employee",
+      "email",
+      "password",
+      "position",
+    ]);
+    if (updateBody.password) {
+      updateBody.password = await hashPassword(updateBody.password);
+    }
+    const employee = await Employee.findByIdAndUpdate(
+      req.params.id,
+      updateBody,
+      { new: true, runValidators: true }
+    );
+    if (!employee) {
+      return res.status(404).json({ message: "Employee not found" });
+    }
     res.status(200).json(sanitizedUser(employee));
   } catch (error) {
     res.status(500).json({ message: "Internal server error" });

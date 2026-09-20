@@ -1,5 +1,10 @@
 import User from "../models/user.model.js";
-import { hashPassword, sanitizedUsers, sanitizedUser } from "../utils/index.js";
+import {
+  hashPassword,
+  sanitizedUsers,
+  sanitizedUser,
+  pick,
+} from "../utils/index.js";
 
 export const getUsers = async (req, res) => {
   try {
@@ -13,8 +18,8 @@ export const getUsers = async (req, res) => {
 
 export const createUser = async (req, res) => {
   const { username, email, password } = req.body;
-  const hashedPassword = await hashPassword(password);
   try {
+    const hashedPassword = await hashPassword(password);
     const user = new User({
       username,
       email,
@@ -33,14 +38,18 @@ export const getUserById = async (req, res) => {
 
 export const updateUser = async (req, res) => {
   const { id } = req.params;
-  const updateBody = req.body;
-  if (updateBody.password) {
-    updateBody.password = await hashPassword(updateBody.password);
-  }
+  const updateBody = pick(req.body, ["username", "email", "password"]);
   try {
+    if (updateBody.password) {
+      updateBody.password = await hashPassword(updateBody.password);
+    }
     const updatedUser = await User.findByIdAndUpdate(id, updateBody, {
       new: true,
+      runValidators: true,
     });
+    if (!updatedUser) {
+      return res.status(404).json({ message: "User not found" });
+    }
     res.status(200).json(sanitizedUser(updatedUser));
   } catch (err) {
     res.status(500).json({ message: err.message });

@@ -1,4 +1,15 @@
 import MenuItem from "../models/menuItem.model.js";
+import { pick } from "../utils/index.js";
+
+const MENU_ITEM_FIELDS = [
+  "title",
+  "description",
+  "price",
+  "image",
+  "category",
+  "popular",
+  "inStock",
+];
 
 export const getMenuItems = async (req, res) => {
   try {
@@ -25,7 +36,7 @@ export const getAllCategory = async (req, res) => {
 
 export const createMenuItem = async (req, res) => {
   try {
-    const menuItem = await MenuItem.create(req.body);
+    const menuItem = await MenuItem.create(pick(req.body, MENU_ITEM_FIELDS));
     return res.status(201).json(menuItem);
   } catch (error) {
     return res.status(500).json({ error: error.message });
@@ -39,9 +50,11 @@ export const getMenuItem = async (req, res) => {
 export const updateMenuItem = async (req, res) => {
   try {
     const { id } = req.params;
-    const menuItem = await MenuItem.findByIdAndUpdate(id, req.body, {
-      new: true,
-    });
+    const menuItem = await MenuItem.findByIdAndUpdate(
+      id,
+      pick(req.body, MENU_ITEM_FIELDS),
+      { new: true, runValidators: true }
+    );
     return res.status(200).json(menuItem);
   } catch (error) {
     return res.status(500).send(error.message);

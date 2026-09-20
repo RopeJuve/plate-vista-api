@@ -1,4 +1,7 @@
 import Table from "../models/table.model.js";
+import { pick } from "../utils/index.js";
+
+const TABLE_FIELDS = ["tableNumber", "capacity", "status"];
 
 export const getTables = async (req, res) => {
   try {
@@ -10,7 +13,7 @@ export const getTables = async (req, res) => {
 };
 
 export const createTable = async (req, res) => {
-  const table = req.body;
+  const table = pick(req.body, TABLE_FIELDS);
   try {
     const newTable = new Table(table);
     await newTable.save();
@@ -31,9 +34,11 @@ export const getTableById = async (req, res) => {
 export const updateTable = async (req, res) => {
   const { id } = req.params;
   try {
-    const updatedTable = await Table.findByIdAndUpdate(id, req.body, {
-      new: true,
-    });
+    const updatedTable = await Table.findByIdAndUpdate(
+      id,
+      pick(req.body, TABLE_FIELDS),
+      { new: true, runValidators: true }
+    );
     res.status(200).json(updatedTable);
   } catch (error) {
     res.status(500).json("Internal server error");
@@ -43,7 +48,10 @@ export const updateTable = async (req, res) => {
 export const deleteTable = async (req, res) => {
   const { id } = req.params;
   try {
-    await Table.findByIdAndRemove(id);
+    const deletedTable = await Table.findByIdAndDelete(id);
+    if (!deletedTable) {
+      return res.status(404).json({ message: "Table not found" });
+    }
     res.json({ message: "Table deleted successfully." });
   } catch (error) {
     res.status(500).json("Internal server error");

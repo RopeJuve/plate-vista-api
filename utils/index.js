@@ -39,6 +39,16 @@ export const sanitizedUser = (user) => {
   return rest;
 };
 
+export const pick = (source, allowedKeys) => {
+  const result = {};
+  allowedKeys.forEach((key) => {
+    if (source && Object.prototype.hasOwnProperty.call(source, key)) {
+      result[key] = source[key];
+    }
+  });
+  return result;
+};
+
 export const calculateTotal = async (items, model) => {
   let total = currency(0);
   await Promise.all(
