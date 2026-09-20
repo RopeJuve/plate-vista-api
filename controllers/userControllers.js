@@ -1,4 +1,5 @@
 import User from "../models/user.model.js";
+import Order from "../models/orders.model.js";
 import {
   hashPassword,
   sanitizedUsers,
@@ -11,7 +12,7 @@ export const getUsers = async (req, res, next) => {
   try {
     const { page, limit, skip } = parsePagination(req.query);
     const [users, total] = await Promise.all([
-      User.find().skip(skip).limit(limit),
+      User.find().skip(skip).limit(limit).lean(),
       User.countDocuments(),
     ]);
     res.status(200).json({ users: sanitizedUsers(users), page, limit, total });
@@ -64,6 +65,8 @@ export const deleteUser = async (req, res, next) => {
   const { id } = req.params;
   try {
     await User.findByIdAndDelete(id);
+    // Anonymize rather than leave a dangling ref or block deletion.
+    await Order.updateMany({ user: id }, { $set: { user: null } });
     res.status(200).json({ message: "User deleted successfully" });
   } catch (err) {
     next(err);

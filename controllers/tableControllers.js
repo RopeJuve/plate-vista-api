@@ -3,35 +3,31 @@ import { pick } from "../utils/index.js";
 
 const TABLE_FIELDS = ["tableNumber", "capacity", "status"];
 
-export const getTables = async (req, res) => {
+export const getTables = async (req, res, next) => {
   try {
-    const tables = await Table.find();
+    const tables = await Table.find().lean();
     res.status(200).json(tables);
   } catch (error) {
-    res.status(500).json("Internal server error");
+    next(error);
   }
 };
 
-export const createTable = async (req, res) => {
+export const createTable = async (req, res, next) => {
   const table = pick(req.body, TABLE_FIELDS);
   try {
     const newTable = new Table(table);
     await newTable.save();
     res.status(201).json(newTable);
   } catch (error) {
-    res.status(500).json("Internal server error");
+    next(error);
   }
 };
 
 export const getTableById = async (req, res) => {
-  try {
-    res.status(200).json(req.table);
-  } catch (error) {
-    res.status(500).json("Internal server error");
-  }
+  res.status(200).json(req.table);
 };
 
-export const updateTable = async (req, res) => {
+export const updateTable = async (req, res, next) => {
   const { id } = req.params;
   try {
     const updatedTable = await Table.findByIdAndUpdate(
@@ -41,11 +37,11 @@ export const updateTable = async (req, res) => {
     );
     res.status(200).json(updatedTable);
   } catch (error) {
-    res.status(500).json("Internal server error");
+    next(error);
   }
 };
 
-export const deleteTable = async (req, res) => {
+export const deleteTable = async (req, res, next) => {
   const { id } = req.params;
   try {
     const deletedTable = await Table.findByIdAndDelete(id);
@@ -54,6 +50,6 @@ export const deleteTable = async (req, res) => {
     }
     res.json({ message: "Table deleted successfully." });
   } catch (error) {
-    res.status(500).json("Internal server error");
+    next(error);
   }
 };

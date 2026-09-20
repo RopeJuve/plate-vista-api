@@ -41,15 +41,16 @@ export const generateTableToken = (tableNum, user) => {
     expiresIn: "4h",
   });
 };
+// Accepts either a Mongoose document or a plain object from .lean().
 export const sanitizedUsers = (users) => {
   return users.map((user) => {
-    const { password, __v, ...rest } = user._doc;
+    const { password, __v, ...rest } = user._doc || user;
     return rest;
   });
 };
 
 export const sanitizedUser = (user) => {
-  const { password, __v, ...rest } = user._doc;
+  const { password, __v, ...rest } = user._doc || user;
   return rest;
 };
 

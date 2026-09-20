@@ -127,7 +127,8 @@ export const getUserOrdersByDate = async (req, res, next) => {
 
     const orders = await Order.find(query)
       .sort({ createdAt: -1 })
-      .populate("menuItems.product");
+      .populate("menuItems.product")
+      .lean();
 
     res.status(200).json(orders);
   } catch (err) {

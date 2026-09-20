@@ -42,6 +42,7 @@ export const getOrders = async (req, res, next) => {
         .populate("menuItems.product")
         .skip(skip)
         .limit(limit)
+        .lean()
         .exec(),
       Order.countDocuments(),
     ]);
