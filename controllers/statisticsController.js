@@ -19,7 +19,7 @@ const parseDateRange = (start_date, end_date) => {
   return { query: { createdAt: { $gte: start, $lte: end } } };
 };
 
-export const getTotalSales = async (req, res) => {
+export const getTotalSales = async (req, res, next) => {
   try {
     const { start_date, end_date } = req.query;
     const { query, error } = parseDateRange(start_date, end_date);
@@ -39,11 +39,11 @@ export const getTotalSales = async (req, res) => {
 
     res.status(200).json({ totalSales: totalSales[0]?.totalSales || 0 });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 };
 
-export const getSalesByMenuItem = async (req, res) => {
+export const getSalesByMenuItem = async (req, res, next) => {
   try {
     const { start_date, end_date } = req.query;
     const { query, error } = parseDateRange(start_date, end_date);
@@ -87,11 +87,11 @@ export const getSalesByMenuItem = async (req, res) => {
 
     res.status(200).json(sales);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 };
 
-export const getOrdersByDate = async (req, res) => {
+export const getOrdersByDate = async (req, res, next) => {
   try {
     const { start_date, end_date, group_by } = req.query;
     const { query, error } = parseDateRange(start_date, end_date);
@@ -117,11 +117,11 @@ export const getOrdersByDate = async (req, res) => {
 
     res.status(200).json(orders);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 };
 
-export const getUserOrdersByDate = async (req, res) => {
+export const getUserOrdersByDate = async (req, res, next) => {
   try {
     const query = { user: req.params.id };
 
@@ -131,11 +131,11 @@ export const getUserOrdersByDate = async (req, res) => {
 
     res.status(200).json(orders);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 };
 
-export const getTopCustomers = async (req, res) => {
+export const getTopCustomers = async (req, res, next) => {
   try {
     const parsedLimit = Number.parseInt(req.query.limit, 10);
     const limit = Number.isNaN(parsedLimit)
@@ -165,6 +165,6 @@ export const getTopCustomers = async (req, res) => {
 
     res.status(200).json(topCustomers);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 };

@@ -67,6 +67,20 @@ app.use("/api/v1/table", tableRouter);
 
 app.use("/api/v1/statistics", statisticsRouter);
 
+app.use((req, res) => {
+  res.status(404).json({ message: "Not found" });
+});
+
+// Central error handler: logs server-side and never leaks internals
+// (Mongoose messages, stack traces, ...) to the client on a 5xx.
+app.use((err, req, res, next) => {
+  console.error(err);
+  if (err.name === "ValidationError" || err.name === "CastError") {
+    return res.status(400).json({ message: err.message });
+  }
+  res.status(500).json({ message: "Internal server error" });
+});
+
 await connectToDatabase();
 
 // Vercel serverless functions invoke this module per-request and don't

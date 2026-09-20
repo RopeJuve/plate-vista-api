@@ -11,7 +11,7 @@ const MENU_ITEM_FIELDS = [
   "inStock",
 ];
 
-export const getMenuItems = async (req, res) => {
+export const getMenuItems = async (req, res, next) => {
   try {
     const { category } = req.query;
     if (category !== undefined) {
@@ -24,25 +24,25 @@ export const getMenuItems = async (req, res) => {
     const menuItems = await MenuItem.find();
     return res.status(200).json(menuItems);
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    next(error);
   }
 };
 
-export const getAllCategory = async (req, res) => {
+export const getAllCategory = async (req, res, next) => {
   try {
     const categories = await MenuItem.distinct("category");
     return res.status(200).json(categories);
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    next(error);
   }
 };
 
-export const createMenuItem = async (req, res) => {
+export const createMenuItem = async (req, res, next) => {
   try {
     const menuItem = await MenuItem.create(pick(req.body, MENU_ITEM_FIELDS));
     return res.status(201).json(menuItem);
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    next(error);
   }
 };
 
@@ -50,7 +50,7 @@ export const getMenuItem = async (req, res) => {
   return res.status(200).json(req.item);
 };
 
-export const updateMenuItem = async (req, res) => {
+export const updateMenuItem = async (req, res, next) => {
   try {
     const { id } = req.params;
     const menuItem = await MenuItem.findByIdAndUpdate(
@@ -60,16 +60,16 @@ export const updateMenuItem = async (req, res) => {
     );
     return res.status(200).json(menuItem);
   } catch (error) {
-    return res.status(500).send(error.message);
+    next(error);
   }
 };
 
-export const deleteMenuItem = async (req, res) => {
+export const deleteMenuItem = async (req, res, next) => {
   try {
     const { id } = req.params;
     await MenuItem.findByIdAndDelete(id);
     return res.status(200).json({ message: "MenuItem deleted successfully" });
   } catch (error) {
-    return res.status(500).send(error.message);
+    next(error);
   }
 };

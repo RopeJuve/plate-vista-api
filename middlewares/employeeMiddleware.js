@@ -10,7 +10,7 @@ export const checkEmployee = async (req, res, next) => {
     req.employee = employee;
     next();
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    next(error);
   }
 };
 
@@ -29,6 +29,6 @@ export const checkBeforeCreate = async (req, res, next) => {
     }
     next();
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    next(error);
   }
 };

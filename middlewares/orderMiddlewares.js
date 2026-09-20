@@ -13,6 +13,6 @@ export const checkOrderExists = async (req, res, next) => {
     req.order = order;
     next();
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    next(error);
   }
 };

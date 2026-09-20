@@ -7,7 +7,7 @@ import {
   parsePagination,
 } from "../utils/index.js";
 
-export const getUsers = async (req, res) => {
+export const getUsers = async (req, res, next) => {
   try {
     const { page, limit, skip } = parsePagination(req.query);
     const [users, total] = await Promise.all([
@@ -16,11 +16,11 @@ export const getUsers = async (req, res) => {
     ]);
     res.status(200).json({ users: sanitizedUsers(users), page, limit, total });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    next(err);
   }
 };
 
-export const createUser = async (req, res) => {
+export const createUser = async (req, res, next) => {
   const { username, email, password } = req.body;
   try {
     const hashedPassword = await hashPassword(password);
@@ -32,7 +32,7 @@ export const createUser = async (req, res) => {
     await user.save();
     res.status(201).json(sanitizedUser(user));
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    next(err);
   }
 };
 
@@ -40,7 +40,7 @@ export const getUserById = async (req, res) => {
   res.status(200).json(sanitizedUser(req.user));
 };
 
-export const updateUser = async (req, res) => {
+export const updateUser = async (req, res, next) => {
   const { id } = req.params;
   const updateBody = pick(req.body, ["username", "email", "password"]);
   try {
@@ -56,16 +56,16 @@ export const updateUser = async (req, res) => {
     }
     res.status(200).json(sanitizedUser(updatedUser));
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    next(err);
   }
 };
 
-export const deleteUser = async (req, res) => {
+export const deleteUser = async (req, res, next) => {
   const { id } = req.params;
   try {
     await User.findByIdAndDelete(id);
     res.status(200).json({ message: "User deleted successfully" });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    next(err);
   }
 };
