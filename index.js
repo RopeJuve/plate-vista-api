@@ -19,6 +19,11 @@ import {
 import { wsServer } from "./wss.js";
 
 dotenv.config();
+
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled promise rejection:", reason);
+});
+
 const app = express();
 
 const PORT = process.env.PORT || 8080;
