@@ -34,18 +34,4 @@ export default function (passport) {
       }
     )
   );
-
-  passport.serializeUser((employeeData, done) => {
-    done(null, employeeData._id);
-  });
-
-  passport.deserializeUser(async (id, done) => {
-    try {
-      const employeeData = await Employee.findById(id);
-      if (!employeeData) throw new Error("employee not found");
-      done(null, employeeData);
-    } catch (error) {
-      done(error, null);
-    }
-  });
 }

@@ -1,8 +1,7 @@
 import express from "express";
 import cors from "cors";
-import bodyParser from "body-parser";
+import helmet from "helmet";
 import dotenv from "dotenv";
-import session from "express-session";
 import connectToDatabase from "./db/db.js";
 import passport from "passport";
 import userPassport from "./strategies/userPassport.js";
@@ -24,28 +23,33 @@ process.on("unhandledRejection", (reason) => {
   console.error("Unhandled promise rejection:", reason);
 });
 
+const REQUIRED_ENV_VARS = ["JWT_SECRET", "MONGO_DB_URL"];
+const missingEnvVars = REQUIRED_ENV_VARS.filter((key) => !process.env[key]);
+if (missingEnvVars.length > 0) {
+  console.error(
+    `Missing required environment variable(s): ${missingEnvVars.join(", ")}`
+  );
+  process.exit(1);
+}
+
 const app = express();
 
 const PORT = process.env.PORT || 8080;
+const CORS_ORIGIN = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(",")
+  : undefined;
 
-app.use(bodyParser.urlencoded({ extended: true }));
-app.use(bodyParser.json());
+app.use(helmet());
 app.use(
   cors({
-    origin: "*",
-    exposedHeaders: ['authorization'],
+    origin: CORS_ORIGIN,
+    exposedHeaders: ["authorization"],
   })
 );
-app.use(express.json());
+app.use(express.json({ limit: "100kb" }));
+app.use(express.urlencoded({ extended: true, limit: "100kb" }));
 
-app.use(
-  session({
-    secret: process.env.SECRET,
-    resave: false,
-    saveUninitialized: false,
-  })
-);
-
+app.use(passport.initialize());
 userPassport(passport);
 employeePassport(passport);
 
@@ -63,16 +67,11 @@ app.use("/api/v1/table", tableRouter);
 
 app.use("/api/v1/statistics", statisticsRouter);
 
-app.use(passport.initialize());
-app.use(passport.session());
-
 await connectToDatabase();
 const s = app.listen(PORT, () => {
   console.log(`Server is running on http://localhost:${PORT}`);
 });
 
-
 wsServer(s);
-
 
 export default app;

@@ -20,12 +20,19 @@ import {
   requireRole,
   requireSelfOrAdmin,
 } from "../middlewares/jwtMiddlewares.js";
+import { authLimiter } from "../middlewares/rateLimiters.js";
 
 const userRouter = express.Router();
 
 userRouter.get("/", requireAuth, requireRole("admin"), getUsers);
-// Registration stays public; rate-limited at the app level (see index.js).
-userRouter.post("/", userBodyValidation, checkBeforeCreate, createUser);
+// Registration stays public but rate-limited.
+userRouter.post(
+  "/",
+  authLimiter,
+  userBodyValidation,
+  checkBeforeCreate,
+  createUser
+);
 userRouter.get(
   "/:id",
   checkId,

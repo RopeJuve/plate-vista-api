@@ -1,6 +1,7 @@
 import express from "express";
 import passport from "passport";
 import { jwtSingToken, requireAuth } from "../middlewares/jwtMiddlewares.js";
+import { authLimiter } from "../middlewares/rateLimiters.js";
 import {
   authenticateWithToken,
   issueTableToken,
@@ -11,6 +12,7 @@ const authRouter = express.Router();
 
 authRouter.post(
   "/login",
+  authLimiter,
   passport.authenticate("user-local", { session: false, failureMessage: true }),
   jwtSingToken,
   login
@@ -21,6 +23,7 @@ authRouter.get("/user", requireAuth, authenticateWithToken);
 authRouter.post("/table/:tableNumber", issueTableToken);
 authRouter.post(
   "/employee/login",
+  authLimiter,
   passport.authenticate("employee-local", { session: false, failureMessage: true }),
   jwtSingToken,
   login
