@@ -21,7 +21,7 @@ export const createUser = async (req, res) => {
       password: hashedPassword,
     });
     await user.save();
-    res.status(201).json(user);
+    res.status(201).json(sanitizedUser(user));
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

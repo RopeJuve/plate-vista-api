@@ -25,7 +25,7 @@ export const createOrder = async (req, res) => {
 export const getOrders = async (req, res) => {
   try {
     const orders = await Order.find()
-      .populate("user")
+      .populate("user", "username")
       .populate("menuItems.product")
       .exec();
 

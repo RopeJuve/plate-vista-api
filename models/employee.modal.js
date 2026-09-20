@@ -15,6 +15,7 @@ const employeeSchema = new Schema(
     password: {
       type: String,
       required: true,
+      select: false,
     },
     position: {
       type: String,
@@ -23,6 +24,13 @@ const employeeSchema = new Schema(
   },
   {
     timestamps: true,
+    toJSON: {
+      transform: (_doc, ret) => {
+        delete ret.password;
+        delete ret.__v;
+        return ret;
+      },
+    },
   }
 );
 

@@ -7,7 +7,7 @@ export default function (passport) {
     "user-local",
     new LocalStrategy(async (username, password, done) => {
       try {
-        const user = await User.findOne({ username });
+        const user = await User.findOne({ username }).select("+password");
         if (!user) return done(null, false, { message: "User not found" });
         const isPasswordMatch = await comparePassword(password, user.password);
         if (!isPasswordMatch)

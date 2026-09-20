@@ -12,7 +12,9 @@ export default function (passport) {
       },
       async (employee, password, done) => {
         try {
-          const employeeData = await Employee.findOne({ employee });
+          const employeeData = await Employee.findOne({ employee }).select(
+            "+password"
+          );
           if (!employeeData)
             return done(null, false, { message: "employee not found" });
           const isPasswordMatch = await comparePassword(

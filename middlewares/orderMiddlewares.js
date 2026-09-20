@@ -4,7 +4,7 @@ export const checkOrderExists = async (req, res, next) => {
   const { id } = req.params;
   try {
     const order = await Order.findById(id)
-      .populate("user")
+      .populate("user", "username")
       .populate("menuItems.product")
       .exec();
     if (!order) {
