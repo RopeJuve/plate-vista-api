@@ -14,22 +14,18 @@ export const checkStatusBody = [
   },
 ];
 
+// user is intentionally not accepted here: the server derives it from the
+// authenticated identity, never from the client (see createOrder).
 export const checkBody = [
-  body("user")
-    .optional()
-    .isMongoId()
-    .withMessage("user must be a valid MongoId"),
   body("menuItems")
-    .isArray()
-    .withMessage("menuItems must be an array")
-    .notEmpty()
-    .withMessage("menuItems cannot be empty"),
+    .isArray({ min: 1, max: 50 })
+    .withMessage("menuItems must be a non-empty array of at most 50 items"),
   body("menuItems.*.product")
     .isMongoId()
     .withMessage("product must be a valid MongoId"),
   body("menuItems.*.quantity")
-    .isInt({ gt: 0 })
-    .withMessage("quantity must be an positive integer"),
+    .isInt({ gt: 0, lt: 100 })
+    .withMessage("quantity must be a positive integer less than 100"),
   (req, res, next) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {

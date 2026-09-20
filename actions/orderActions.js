@@ -2,7 +2,13 @@ import MenuItem from "../models/menuItem.model.js";
 import Order from "../models/orders.model.js";
 import Table from "../models/table.model.js";
 import { ORDER_STATUSES } from "../utils/orderStatuses.js";
-import { calculateTotal, updatedOrder } from "../utils/index.js";
+import {
+  calculateTotal,
+  incrementSoldCounts,
+  updatedOrder,
+  assertValidMenuItems,
+  OrderError,
+} from "../utils/index.js";
 
 const sendError = (connection, message) => {
   if (connection && connection.readyState === connection.OPEN) {
@@ -25,9 +31,7 @@ export const createOrderAction = async (
 ) => {
   try {
     const { menuItems } = payload || {};
-    if (!Array.isArray(menuItems) || menuItems.length === 0) {
-      return sendError(connection, "menuItems is required");
-    }
+    assertValidMenuItems(menuItems);
 
     const table = await Table.findOne({ tableNumber: tableNum });
     if (!table) {
@@ -41,20 +45,22 @@ export const createOrderAction = async (
       totalPrice,
     });
     await order.save();
+    await incrementSoldCounts(menuItems, MenuItem);
     await order.populate("menuItems.product");
 
-    table.orders.push(order._id);
-    table.status = "occupied";
-    await table.save();
-    await table.populate({
+    const updatedTable = await Table.findOneAndUpdate(
+      { tableNumber: tableNum },
+      { $push: { orders: order._id }, $set: { status: "occupied" } },
+      { new: true }
+    ).populate({
       path: "orders",
       populate: { path: "menuItems.product" },
     });
 
-    broadcast(tableNum, table);
+    broadcast(tableNum, updatedTable);
   } catch (err) {
     console.error(err);
-    sendError(connection, "Failed to create order");
+    sendError(connection, err instanceof OrderError ? err.message : "Failed to create order");
   }
 };
 
@@ -68,9 +74,10 @@ export const updateOrderAction = async (
 ) => {
   try {
     const { orderId, menuItems } = payload || {};
-    if (!orderId || !Array.isArray(menuItems) || menuItems.length === 0) {
-      return sendError(connection, "orderId and menuItems are required");
+    if (!orderId) {
+      return sendError(connection, "orderId is required");
     }
+    assertValidMenuItems(menuItems);
 
     if (role !== "employee" && !(await orderBelongsToTable(orderId, tableNum))) {
       return sendError(connection, "Order does not belong to this table");
@@ -86,7 +93,7 @@ export const updateOrderAction = async (
     broadcast(tableNum, upO);
   } catch (err) {
     console.error(err);
-    sendError(connection, "Failed to update order");
+    sendError(connection, err instanceof OrderError ? err.message : "Failed to update order");
   }
 };
 

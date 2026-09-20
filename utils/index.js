@@ -2,6 +2,7 @@ import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
 import currency from "currency.js";
+import mongoose from "mongoose";
 dotenv.config();
 
 export const hashPassword = async (password) => {
@@ -62,51 +63,106 @@ export const pick = (source, allowedKeys) => {
   return result;
 };
 
+const MAX_MENU_ITEMS = 50;
+const MAX_QUANTITY = 100;
+
+// Mirrors validators/orderValidators.js's checkBody so WebSocket payloads
+// (which never go through express-validator) get the same bounds as REST.
+export const assertValidMenuItems = (menuItems) => {
+  if (
+    !Array.isArray(menuItems) ||
+    menuItems.length === 0 ||
+    menuItems.length > MAX_MENU_ITEMS
+  ) {
+    throw new OrderError(
+      `menuItems must be a non-empty array of at most ${MAX_MENU_ITEMS} items`,
+      400
+    );
+  }
+  menuItems.forEach((item) => {
+    if (!item || !mongoose.Types.ObjectId.isValid(item.product)) {
+      throw new OrderError("product must be a valid MongoId", 400);
+    }
+    if (
+      !Number.isInteger(item.quantity) ||
+      item.quantity <= 0 ||
+      item.quantity >= MAX_QUANTITY
+    ) {
+      throw new OrderError(
+        `quantity must be a positive integer less than ${MAX_QUANTITY}`,
+        400
+      );
+    }
+  });
+};
+
+export class OrderError extends Error {
+  constructor(message, status = 400) {
+    super(message);
+    this.name = "OrderError";
+    this.status = status;
+  }
+}
+
+// Pure: reads menu item prices/stock and returns a total. Never mutates
+// the database - callers apply numSold increments separately, after the
+// order itself has been saved successfully.
 export const calculateTotal = async (items, model) => {
   let total = currency(0);
-  await Promise.all(
-    items.map(async (item) => {
-      const menuItem = await model.findById(item.product);
-      if (!menuItem) {
-        throw currency(0).value;
-      }
-      menuItem.numSold = currency(menuItem.numSold).add(item.quantity);
-      await menuItem.save();
-      const itemPrice = currency(menuItem.price);
-      const itemQuantity = currency(item.quantity);
-      const itemTotal = itemPrice.multiply(itemQuantity);
-      total = total.add(itemTotal);
-    })
+  const menuItems = await Promise.all(
+    items.map((item) => model.findById(item.product))
   );
+  menuItems.forEach((menuItem, index) => {
+    const item = items[index];
+    if (!menuItem) {
+      throw new OrderError(`MenuItem not found: ${item.product}`, 404);
+    }
+    if (menuItem.inStock === false) {
+      throw new OrderError(`MenuItem out of stock: ${menuItem.title}`, 409);
+    }
+    const itemPrice = currency(menuItem.price);
+    const itemQuantity = currency(item.quantity);
+    total = total.add(itemPrice.multiply(itemQuantity));
+  });
   return total.value;
 };
 
-export const populateMenuItem = async (items, MenuItem) => {
-  return await Promise.all(
-    items.map(async (item) => {
-      const menuItem = await MenuItem.findById(item.product);
-      return { product: menuItem, quantity: item.quantity };
-    })
+// Applies each item's quantity to numSold as an atomic increment, so
+// concurrent orders can't lose updates the way find -> mutate -> save did.
+export const incrementSoldCounts = async (items, model) => {
+  await Promise.all(
+    items.map((item) =>
+      model.updateOne(
+        { _id: item.product },
+        { $inc: { numSold: item.quantity } }
+      )
+    )
   );
 };
 
 export const updatedOrder = async (order, reqBody, MenuItem) => {
-  const newTotalPrice = await calculateTotal(reqBody.menuItems, MenuItem);
-  if (newTotalPrice === 0) {
-    return res.status(404).json({ message: "MenuItem not found" });
+  const newItems = reqBody.menuItems;
+  if (!Array.isArray(newItems) || newItems.length === 0) {
+    throw new OrderError("menuItems is required", 400);
   }
-  order.totalPrice = currency(order.totalPrice).add(newTotalPrice).value;
-  const existingMenuItems = order.menuItems.filter((item) => {
-    return item.product._id.toString() === reqBody.menuItems[0].product;
-  }).length;
-  if (existingMenuItems === 0) {
-    order.menuItems = [...order.menuItems, ...reqBody.menuItems];
-  } else {
-    const foundItem = order.menuItems.find(
-      (item) => item.product._id.toString() === reqBody.menuItems[0].product
-    );
-    foundItem.quantity += reqBody.menuItems[0].quantity;
-  }
+
+  const quantities = new Map();
+  order.menuItems.forEach((item) => {
+    const productId = (item.product._id || item.product).toString();
+    quantities.set(productId, (quantities.get(productId) || 0) + item.quantity);
+  });
+  newItems.forEach((item) => {
+    quantities.set(item.product, (quantities.get(item.product) || 0) + item.quantity);
+  });
+  const mergedItems = Array.from(quantities, ([product, quantity]) => ({
+    product,
+    quantity,
+  }));
+
+  const totalPrice = await calculateTotal(mergedItems, MenuItem);
+  order.menuItems = mergedItems;
+  order.totalPrice = totalPrice;
   await order.save();
+  await incrementSoldCounts(newItems, MenuItem);
   return order;
 };
