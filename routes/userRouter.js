@@ -15,21 +15,41 @@ import {
   checkId,
   checkUser,
 } from "../middlewares/usersMiddlewares.js";
+import {
+  requireAuth,
+  requireRole,
+  requireSelfOrAdmin,
+} from "../middlewares/jwtMiddlewares.js";
 
 const userRouter = express.Router();
 
-userRouter.get("/", getUsers);
+userRouter.get("/", requireAuth, requireRole("admin"), getUsers);
+// Registration stays public; rate-limited at the app level (see index.js).
 userRouter.post("/", userBodyValidation, checkBeforeCreate, createUser);
-userRouter.get("/:id", checkId, checkUser, getUserById);
-//TODO: Add the /:id/orders route here
+userRouter.get(
+  "/:id",
+  checkId,
+  requireAuth,
+  requireSelfOrAdmin,
+  checkUser,
+  getUserById
+);
 userRouter.put(
   "/:id",
   checkId,
+  requireAuth,
+  requireSelfOrAdmin,
   checkUser,
   userUpdateValidation,
-  checkUser,
   updateUser
 );
-userRouter.delete("/:id", checkId, checkUser, deleteUser);
+userRouter.delete(
+  "/:id",
+  checkId,
+  requireAuth,
+  requireRole("admin"),
+  checkUser,
+  deleteUser
+);
 
 export default userRouter;

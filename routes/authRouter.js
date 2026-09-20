@@ -1,6 +1,6 @@
 import express from "express";
 import passport from "passport";
-import { jwtSingToken, jwtVerifyToken } from "../middlewares/jwtMiddlewares.js";
+import { jwtSingToken, requireAuth } from "../middlewares/jwtMiddlewares.js";
 import {
   authenticateWithToken,
   login,
@@ -10,14 +10,14 @@ const authRouter = express.Router();
 
 authRouter.post(
   "/login",
-  passport.authenticate("user-local", { failureMessage: true }),
+  passport.authenticate("user-local", { session: false, failureMessage: true }),
   jwtSingToken,
   login
 );
-authRouter.get("/user", jwtVerifyToken, authenticateWithToken);
+authRouter.get("/user", requireAuth, authenticateWithToken);
 authRouter.post(
   "/employee/login",
-  passport.authenticate("employee-local", { failureMessage: true }),
+  passport.authenticate("employee-local", { session: false, failureMessage: true }),
   jwtSingToken,
   login
 );

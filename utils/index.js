@@ -14,19 +14,18 @@ export const comparePassword = async (password, hashedPassword) => {
 };
 
 export const generateToken = (user) => {
-  return jwt.sign(
-    {
-      id: user._id,
-      username: user.username,
-      email: user.email,
-    },
-    process.env.SECRET,
-    { expiresIn: "1h" }
-  );
+  const isEmployee = Boolean(user.position);
+  const payload = isEmployee
+    ? { id: user._id, role: "employee", position: user.position }
+    : { id: user._id, role: "user" };
+  return jwt.sign(payload, process.env.JWT_SECRET, {
+    algorithm: "HS256",
+    expiresIn: "1h",
+  });
 };
 
 export const verifyToken = (token) => {
-  return jwt.verify(token, process.env.SECRET);
+  return jwt.verify(token, process.env.JWT_SECRET, { algorithms: ["HS256"] });
 };
 export const sanitizedUsers = (users) => {
   return users.map((user) => {

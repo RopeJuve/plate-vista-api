@@ -9,16 +9,46 @@ import {
 } from "../controllers/orderControllers.js";
 import { checkOrderExists } from "../middlewares/orderMiddlewares.js";
 import { checkId } from "../middlewares/usersMiddlewares.js";
-import { checkBody } from "../validators/orderValidators.js";
+import { checkBody, checkStatusBody } from "../validators/orderValidators.js";
+import { requireAuth, requireRole } from "../middlewares/jwtMiddlewares.js";
 
 const orderRouter = express.Router();
 
-orderRouter.get("/", getOrders);
-//TODO: Add the /sortByDate and /total-by-date route here
-orderRouter.post("/", checkBody, createOrder);
-orderRouter.get("/:id", checkId, checkOrderExists, getOrder);
-orderRouter.put("/:id", checkId, checkOrderExists, updateOrder);
-orderRouter.put("/:id/status", checkId, checkOrderExists, updateOrderStatus);
-orderRouter.delete("/:id", checkId, checkOrderExists, deleteOrder);
+orderRouter.get("/", requireAuth, requireRole("employee"), getOrders);
+// Any authenticated user or employee may place an order.
+orderRouter.post("/", requireAuth, checkBody, createOrder);
+orderRouter.get(
+  "/:id",
+  requireAuth,
+  requireRole("employee"),
+  checkId,
+  checkOrderExists,
+  getOrder
+);
+orderRouter.put(
+  "/:id",
+  requireAuth,
+  requireRole("employee"),
+  checkId,
+  checkOrderExists,
+  updateOrder
+);
+orderRouter.put(
+  "/:id/status",
+  requireAuth,
+  requireRole("employee"),
+  checkId,
+  checkOrderExists,
+  checkStatusBody,
+  updateOrderStatus
+);
+orderRouter.delete(
+  "/:id",
+  requireAuth,
+  requireRole("employee"),
+  checkId,
+  checkOrderExists,
+  deleteOrder
+);
 
 export default orderRouter;
