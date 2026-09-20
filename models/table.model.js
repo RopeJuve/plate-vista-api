@@ -25,15 +25,6 @@ const tableSchema = new Schema(
       ],
       default: [],
     },
-    customers: {
-      type: [
-        {
-          type: Schema.Types.ObjectId,
-          ref: "Customer",
-        },
-      ],
-      default: [],
-    },
   },
   {
     timestamps: true,

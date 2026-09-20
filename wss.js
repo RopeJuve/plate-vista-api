@@ -1,9 +1,9 @@
-import { WebSocketServer } from "ws";
+import { WebSocketServer, WebSocket } from "ws";
 import url from "url";
 import { v4 as uuidv4 } from "uuid";
-import Employee from "./models/employee.modal.js";
 import User from "./models/user.model.js";
 import Table from "./models/table.model.js";
+import { verifyToken } from "./utils/index.js";
 import {
   createOrderAction,
   updateOrderAction,
@@ -11,24 +11,44 @@ import {
   deleteOrderAction,
 } from "./actions/orderActions.js";
 
-let connections = {};
-let monitoringConnections = {};
-let users = {};
+// uuid -> { connection, role, tableNum, identity, isMonitoring, isAlive }
+const sockets = new Map();
+
+const isOpen = (connection) =>
+  connection && connection.readyState === WebSocket.OPEN;
+
+const send = (connection, data) => {
+  if (isOpen(connection)) {
+    connection.send(JSON.stringify(data));
+  }
+};
+
+const isValidTableNum = (value) =>
+  typeof value === "string" && /^\d+$/.test(value) && Number(value) > 0;
+
+const identityFor = async (auth) => {
+  if (auth.role === "employee") {
+    return { employeeId: auth.id, position: auth.position };
+  }
+  if (auth.userId) {
+    const user = await User.findById(auth.userId);
+    if (user) return { userId: user._id, username: user.username };
+  }
+  return { username: "Guest" };
+};
 
 const broadcast = async (tableNum, payload) => {
-  console.log(Object.keys(connections));
-  Object.keys(connections).forEach((id) => {
-    const connection = connections[id];
-    console.log(`connection from broadcast: ${connection}`);
-    connection.send(
-      JSON.stringify({
+  for (const meta of sockets.values()) {
+    if (meta.tableNum === String(tableNum) && isOpen(meta.connection)) {
+      send(meta.connection, {
         type: "orderSuccess",
         tableNum,
         payload,
-        user: users[id],
-      })
-    );
-  });
+        user: meta.identity,
+      });
+    }
+  }
+
   const allTables = await Table.find().populate({
     path: "orders",
     populate: {
@@ -36,63 +56,86 @@ const broadcast = async (tableNum, payload) => {
       match: { _id: { $ne: null } },
     },
   });
-  Object.keys(monitoringConnections).forEach((id) => {
-    const connection = monitoringConnections[id];
-    connection.send(
-      JSON.stringify({
-        type: "allTables",
-        payload: allTables,
-      })
-    );
-  });
+  for (const meta of sockets.values()) {
+    if (meta.isMonitoring && isOpen(meta.connection)) {
+      send(meta.connection, { type: "allTables", payload: allTables });
+    }
+  }
 };
 
-const handleMessages = async (bytes, tableNum, userId, uuid) => {
+const EMPLOYEE_ONLY_ACTIONS = new Set([
+  "changeStatus",
+  "completeOrder",
+  "deleteOrder",
+]);
+const GUEST_ACTIONS = new Set(["newOrder", "updateOrder"]);
+
+const handleMessages = async (bytes, meta) => {
+  const { connection, role, tableNum } = meta;
   try {
     const message = JSON.parse(bytes.toString());
-    const user = users[userId] ? users[userId] : users[uuid];
-    console.log(message.type);
+
+    if (role !== "employee" && EMPLOYEE_ONLY_ACTIONS.has(message.type)) {
+      return send(connection, { type: "error", payload: "Forbidden" });
+    }
+    if (role !== "employee" && !GUEST_ACTIONS.has(message.type)) {
+      return send(connection, { type: "error", payload: "Forbidden" });
+    }
 
     switch (message.type) {
       case "newOrder":
-        await createOrderAction(message.payload, broadcast, user, tableNum);
+        await createOrderAction(
+          message.payload,
+          broadcast,
+          meta.identity,
+          tableNum,
+          connection
+        );
         break;
       case "updateOrder":
-        await updateOrderAction(message.payload, broadcast, user, tableNum);
+        await updateOrderAction(
+          message.payload,
+          broadcast,
+          meta.identity,
+          tableNum,
+          connection,
+          role
+        );
         break;
       case "changeStatus":
-        await changeStatusAction(message.payload, broadcast, user, tableNum);
+        await changeStatusAction(
+          message.payload,
+          broadcast,
+          meta.identity,
+          tableNum,
+          connection
+        );
         break;
       case "completeOrder":
         await changeStatusAction(
-          { orderId: message.payload.orderId, status: "Completed" },
+          { orderId: message.payload.orderId, status: "Complete" },
           broadcast,
-          user,
-          tableNum
+          meta.identity,
+          tableNum,
+          connection
         );
         break;
       case "deleteOrder":
-        await deleteOrderAction(message.payload, broadcast, user, tableNum);
+        await deleteOrderAction(
+          message.payload,
+          broadcast,
+          meta.identity,
+          tableNum,
+          connection
+        );
+        break;
       default:
         break;
     }
   } catch (err) {
-    console.log(err);
-    connections[uuid || userId].send(
-      JSON.stringify({
-        type: "error",
-        payload: "Invalid request",
-      })
-    );
+    console.error(err);
+    send(connection, { type: "error", payload: "Invalid request" });
   }
-};
-
-const handleClose = (tableNum, uuid, userId) => {
-  delete connections[userId || uuid];
-  delete users[userId || uuid];
-  console.log(tableNum);
-  console.log(`User: ${users[userId || uuid]} has disconnected`);
-  console.log(`connection: ${connections[userId || uuid]} has disconnected`);
 };
 
 export const wsServer = async (server) => {
@@ -102,101 +145,120 @@ export const wsServer = async (server) => {
   });
 
   server.on("upgrade", (request, socket, head) => {
+    const { query } = url.parse(request.url, true);
+    const token = query.token;
+
+    if (!token) {
+      socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+
+    let auth;
+    try {
+      auth = verifyToken(token);
+    } catch (error) {
+      socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+
+    if (auth.role !== "employee" && auth.role !== "guest") {
+      socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+
+    if (
+      auth.role === "employee" &&
+      query.tableNum !== undefined &&
+      !isValidTableNum(query.tableNum)
+    ) {
+      socket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+
     wss.handleUpgrade(request, socket, head, (socket) => {
-      wss.emit("connection", socket, request);
+      wss.emit("connection", socket, request, auth);
     });
   });
-  wss.on("connection", async (connection, request) => {
-    console.log("Client connected");
-    const uuid = uuidv4();
-    const { tableNum, userId } = url.parse(request.url, true).query;
 
-    if (!tableNum && userId) {
-      console.log("Connected without table number");
-      monitoringConnections[uuid] = connection;
-      try {
+  wss.on("connection", async (connection, request, auth) => {
+    const uuid = uuidv4();
+    const { query } = url.parse(request.url, true);
+
+    // Guests are always scoped to the table embedded in their signed
+    // token; employees may pick any table (or none, for monitoring).
+    const tableNum =
+      auth.role === "guest" ? auth.tableNum : query.tableNum || null;
+    const isMonitoring = auth.role === "employee" && !tableNum;
+
+    const identity = await identityFor(auth);
+    const meta = {
+      connection,
+      role: auth.role,
+      tableNum,
+      identity,
+      isMonitoring,
+    };
+    sockets.set(uuid, meta);
+
+    try {
+      if (isMonitoring) {
         const allTables = await Table.find().populate({
+          path: "orders",
+          populate: { path: "menuItems.product" },
+        });
+        send(connection, { type: "allTables", payload: allTables });
+      } else if (tableNum) {
+        const table = await Table.findOne({
+          tableNumber: tableNum,
+        }).populate({
           path: "orders",
           populate: {
             path: "menuItems.product",
+            match: { _id: { $ne: null } },
           },
         });
-        connection.send(
-          JSON.stringify({
-            type: "allTables",
-            payload: allTables,
-          })
-        );
-      } catch (error) {
-        console.error("Error fetching all tables:", error);
-        connection.send(
-          JSON.stringify({
-            type: "error",
-            payload: "Failed to fetch tables",
-          })
-        );
-      }
-    }
-
-    if (!userId && tableNum) {
-      connections[uuid] = connection;
-      users[uuid] = {
-        username: `Guest`,
-        tableNum: tableNum ? tableNum : "",
-        state: {},
-      };
-      console.log(`User: ${users[uuid].username}`);
-      console.log(`connection: ${connections[uuid]}`);
-    } else {
-      connections[userId] = connection;
-      console.log(`connection: ${connections[userId]}`);
-      try {
-        const userData = await User.findById(userId);
-        const employeeData = await Employee.findById(userId);
-
-        if (!userData && employeeData) {
-          users[employeeData._id] = {
-            employee: employeeData.employee,
-            tableNum,
-            state: {},
-          };
-        } else if (userData) {
-          users[userData._id] = {
-            username: userData.username,
-            tableNum,
-            state: {},
-          };
+        if (!table) {
+          send(connection, { type: "error", payload: "Table not found" });
+        } else {
+          send(connection, { type: "orderSuccess", tableNum, payload: table });
         }
-      } catch (error) {
-        console.error("Error fetching user or employee data:", error);
       }
+    } catch (error) {
+      console.error("Error establishing WS connection:", error);
     }
-    console.log(users);
-    if (tableNum) {
-      console.log(`Table number: ${tableNum}`);
-      const table = await Table.findOne({ tableNumber: tableNum }).populate({
-        path: "orders",
-        populate: {
-          path: "menuItems.product",
-          match: { _id: { $ne: null } },
-        },
-      });
-      broadcast(tableNum, table);
-    }
+
+    connection.isAlive = true;
+    connection.on("pong", () => {
+      connection.isAlive = true;
+    });
 
     connection.on("message", async (message) => {
-      await handleMessages(message, tableNum, userId, uuid);
+      await handleMessages(message, meta);
     });
 
     connection.on("close", () => {
-      if (monitoringConnections[uuid]) {
-        delete monitoringConnections[uuid];
-        console.log(
-          `Monitoring connection with UUID: ${uuid} has been removed.`
-        );
-      }
-      handleClose(tableNum, uuid, userId);
+      sockets.delete(uuid);
     });
-    return wss;
   });
+
+  const heartbeat = setInterval(() => {
+    for (const [uuid, meta] of sockets.entries()) {
+      const { connection } = meta;
+      if (connection.isAlive === false) {
+        sockets.delete(uuid);
+        connection.terminate();
+        continue;
+      }
+      connection.isAlive = false;
+      connection.ping();
+    }
+  }, 30000);
+
+  wss.on("close", () => clearInterval(heartbeat));
+
+  return wss;
 };

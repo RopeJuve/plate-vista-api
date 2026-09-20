@@ -12,7 +12,12 @@ export default function (passport) {
       },
       async (employee, password, done) => {
         try {
-          const employeeData = await Employee.findOne({ employee });
+          if (typeof employee !== "string" || typeof password !== "string") {
+            return done(null, false, { message: "Invalid credentials" });
+          }
+          const employeeData = await Employee.findOne({ employee }).select(
+            "+password"
+          );
           if (!employeeData)
             return done(null, false, { message: "employee not found" });
           const isPasswordMatch = await comparePassword(
@@ -29,18 +34,4 @@ export default function (passport) {
       }
     )
   );
-
-  passport.serializeUser((employeeData, done) => {
-    done(null, employeeData._id);
-  });
-
-  passport.deserializeUser(async (id, done) => {
-    try {
-      const employeeData = await Employee.findById(id);
-      if (!employeeData) throw new Error("employee not found");
-      done(null, employeeData);
-    } catch (error) {
-      done(error, null);
-    }
-  });
 }

@@ -1,4 +1,5 @@
 import { Schema, model } from "mongoose";
+import { ORDER_STATUSES } from "../utils/orderStatuses.js";
 
 const orderSchema = new Schema(
   {
@@ -26,7 +27,7 @@ const orderSchema = new Schema(
     orderStatus: {
       type: String,
       default: "Pending",
-      enum: ["Pending", "Processing", "Complete"],
+      enum: ORDER_STATUSES,
     },
   },
   {

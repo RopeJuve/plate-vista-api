@@ -1,29 +1,39 @@
 import User from "../models/user.model.js";
-import { hashPassword, sanitizedUsers, sanitizedUser } from "../utils/index.js";
+import Order from "../models/orders.model.js";
+import {
+  hashPassword,
+  sanitizedUsers,
+  sanitizedUser,
+  pick,
+  parsePagination,
+} from "../utils/index.js";
 
-export const getUsers = async (req, res) => {
+export const getUsers = async (req, res, next) => {
   try {
-    const users = await User.find();
-    const usersInfo = sanitizedUsers(users);
-    res.status(200).json(usersInfo);
+    const { page, limit, skip } = parsePagination(req.query);
+    const [users, total] = await Promise.all([
+      User.find().skip(skip).limit(limit).lean(),
+      User.countDocuments(),
+    ]);
+    res.status(200).json({ users: sanitizedUsers(users), page, limit, total });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    next(err);
   }
 };
 
-export const createUser = async (req, res) => {
+export const createUser = async (req, res, next) => {
   const { username, email, password } = req.body;
-  const hashedPassword = await hashPassword(password);
   try {
+    const hashedPassword = await hashPassword(password);
     const user = new User({
       username,
       email,
       password: hashedPassword,
     });
     await user.save();
-    res.status(201).json(user);
+    res.status(201).json(sanitizedUser(user));
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    next(err);
   }
 };
 
@@ -31,28 +41,34 @@ export const getUserById = async (req, res) => {
   res.status(200).json(sanitizedUser(req.user));
 };
 
-export const updateUser = async (req, res) => {
+export const updateUser = async (req, res, next) => {
   const { id } = req.params;
-  const updateBody = req.body;
-  if (updateBody.password) {
-    updateBody.password = await hashPassword(updateBody.password);
-  }
+  const updateBody = pick(req.body, ["username", "email", "password"]);
   try {
+    if (updateBody.password) {
+      updateBody.password = await hashPassword(updateBody.password);
+    }
     const updatedUser = await User.findByIdAndUpdate(id, updateBody, {
       new: true,
+      runValidators: true,
     });
+    if (!updatedUser) {
+      return res.status(404).json({ message: "User not found" });
+    }
     res.status(200).json(sanitizedUser(updatedUser));
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    next(err);
   }
 };
 
-export const deleteUser = async (req, res) => {
+export const deleteUser = async (req, res, next) => {
   const { id } = req.params;
   try {
     await User.findByIdAndDelete(id);
+    // Anonymize rather than leave a dangling ref or block deletion.
+    await Order.updateMany({ user: id }, { $set: { user: null } });
     res.status(200).json({ message: "User deleted successfully" });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    next(err);
   }
 };

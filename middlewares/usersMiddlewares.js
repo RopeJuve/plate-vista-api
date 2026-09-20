@@ -19,13 +19,16 @@ export const checkUser = async (req, res, next) => {
     req.user = user;
     next();
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    next(error);
   }
 };
 
 export const checkBeforeCreate = async (req, res, next) => {
   try {
     const { username, email } = req.body;
+    if (typeof username !== "string" || typeof email !== "string") {
+      return res.status(400).json({ message: "Invalid username or email" });
+    }
     const user = await User.findOne({
       username,
     });
@@ -35,6 +38,6 @@ export const checkBeforeCreate = async (req, res, next) => {
     }
     next();
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    next(error);
   }
 };

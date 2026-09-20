@@ -10,13 +10,16 @@ export const checkItem = async (req, res, next) => {
     req.item = item;
     next();
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    next(error);
   }
 };
 
 export const checkBeforeCreate = async (req, res, next) => {
   try {
     const { title } = req.body;
+    if (typeof title !== "string") {
+      return res.status(400).json({ message: "Invalid title" });
+    }
     const item = await MenuItem.findOne({
       title,
     });
@@ -25,6 +28,6 @@ export const checkBeforeCreate = async (req, res, next) => {
     }
     next();
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    next(error);
   }
 };

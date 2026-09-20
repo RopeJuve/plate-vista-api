@@ -16,6 +16,7 @@ import {
   checkBeforeCreate,
   checkItem,
 } from "../middlewares/menuItemMiddlewares.js";
+import { requireAuth, requireRole } from "../middlewares/jwtMiddlewares.js";
 
 const menuItemRouter = express.Router();
 
@@ -23,6 +24,8 @@ menuItemRouter.get("/", getMenuItems);
 menuItemRouter.get("/category", getAllCategory);
 menuItemRouter.post(
   "/",
+  requireAuth,
+  requireRole("admin"),
   menuItemBodyValidation,
   checkBeforeCreate,
   createMenuItem
@@ -30,11 +33,20 @@ menuItemRouter.post(
 menuItemRouter.get("/:id", checkId, checkItem, getMenuItem);
 menuItemRouter.put(
   "/:id",
+  requireAuth,
+  requireRole("admin"),
   checkId,
   checkItem,
   menuItemUpdateValidation,
   updateMenuItem
 );
-menuItemRouter.delete("/:id", checkId, checkItem, deleteMenuItem);
+menuItemRouter.delete(
+  "/:id",
+  requireAuth,
+  requireRole("admin"),
+  checkId,
+  checkItem,
+  deleteMenuItem
+);
 
 export default menuItemRouter;

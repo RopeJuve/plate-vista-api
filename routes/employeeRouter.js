@@ -12,7 +12,12 @@ import {
 } from "../validators/EmployeeValidators.js";
 import { checkId } from "../middlewares/usersMiddlewares.js";
 import { checkEmployee } from "../middlewares/employeeMiddleware.js";
+import { requireAuth, requireRole } from "../middlewares/jwtMiddlewares.js";
+
 const employeeRouter = express.Router();
+
+// The entire employee resource is admin-only.
+employeeRouter.use(requireAuth, requireRole("admin"));
 
 employeeRouter.get("/", getEmployees);
 employeeRouter.post("/", employeeBodyValidation, createEmployee);

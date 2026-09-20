@@ -4,7 +4,7 @@ export const checkOrderExists = async (req, res, next) => {
   const { id } = req.params;
   try {
     const order = await Order.findById(id)
-      .populate("user")
+      .populate("user", "username")
       .populate("menuItems.product")
       .exec();
     if (!order) {
@@ -13,6 +13,6 @@ export const checkOrderExists = async (req, res, next) => {
     req.order = order;
     next();
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    next(error);
   }
 };

@@ -14,8 +14,9 @@ export const employeeBodyValidation = [
   check("password", "Password is required")
     .not()
     .isEmpty()
-    .isLength({ min: 4 })
-    .withMessage("Password must be at least 4 characters long"),
+    .isString()
+    .isLength({ min: 8 })
+    .withMessage("Password must be at least 8 characters long"),
   check("position", "Position is required")
     .not()
     .isEmpty()
@@ -37,8 +38,9 @@ export const employeeUpdateValidation = [
     .optional(),
   check("email").isEmail().withMessage("Invalid email").optional(),
   check("password")
-    .isLength({ min: 4 })
-    .withMessage("Password must be at least 4 characters long")
+    .isString()
+    .isLength({ min: 8 })
+    .withMessage("Password must be at least 8 characters long")
     .optional(),
   check("position")
     .isLength({ min: 3 })

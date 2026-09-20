@@ -1,5 +1,7 @@
 import { check, validationResult } from "express-validator";
 
+const TABLE_STATUSES = ["occupied", "vacant", "reserved"];
+
 export const tableBodyValidator = [
   check("tableNumber", "Table number is required")
     .not()
@@ -11,7 +13,10 @@ export const tableBodyValidator = [
     .isEmpty()
     .isNumeric()
     .withMessage("Capacity must be a number"),
-  check("status").isString().withMessage("Status must be a string").optional(),
+  check("status")
+    .isIn(TABLE_STATUSES)
+    .withMessage(`Status must be one of: ${TABLE_STATUSES.join(", ")}`)
+    .optional(),
   (req, res, next) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -30,5 +35,15 @@ export const tableUpdateValidator = [
     .isNumeric()
     .withMessage("Capacity must be a number")
     .optional(),
-  check("status").isString().withMessage("Status must be a string").optional(),
+  check("status")
+    .isIn(TABLE_STATUSES)
+    .withMessage(`Status must be one of: ${TABLE_STATUSES.join(", ")}`)
+    .optional(),
+  (req, res, next) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+    next();
+  },
 ];
