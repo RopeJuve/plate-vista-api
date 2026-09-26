@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { nanoid } from "nanoid";
 import Restaurant from "../modules/restaurants/restaurant.model.js";
 
 const TENANT_COLLECTIONS = ["tables", "menuitems", "orders", "tablesessions", "employees"];
@@ -11,6 +12,36 @@ const dropIfExists = async (collection, name) => {
 };
 
 const collectionExists = async (db, name) => db.listCollections({ name }).hasNext();
+
+const backfillTableQrCodes = async (tables) => {
+  const missing = await tables
+    .find({ $or: [{ qrCode: { $exists: false } }, { qrCode: null }, { qrCode: "" }] })
+    .toArray();
+  if (missing.length === 0) return;
+  await tables.bulkWrite(
+    missing.map((table) => ({
+      updateOne: {
+        filter: { _id: table._id },
+        update: { $set: { qrCode: nanoid(12) } },
+      },
+    }))
+  );
+};
+
+const ensureClientOrderIdIndex = async (orders) => {
+  const existing = await orders.indexes();
+  if (
+    existing.some(
+      (index) => index.name === "restaurantId_1_clientOrderId_1" && !index.partialFilterExpression
+    )
+  ) {
+    await orders.dropIndex("restaurantId_1_clientOrderId_1");
+  }
+  await orders.createIndex(
+    { restaurantId: 1, clientOrderId: 1 },
+    { unique: true, partialFilterExpression: { clientOrderId: { $type: "string" } } }
+  );
+};
 
 export const migrateTenants = async () => {
   let restaurant = await Restaurant.findOne({ slug: "default" });
@@ -36,9 +67,13 @@ export const migrateTenants = async () => {
     const tables = db.collection("tables");
     await tables.updateMany({}, { $unset: { orders: "" } });
     await dropIfExists(tables, "tableNumber_1");
+    await backfillTableQrCodes(tables);
   }
   if (await collectionExists(db, "menuitems")) {
     await dropIfExists(db.collection("menuitems"), "title_1");
+  }
+  if (await collectionExists(db, "orders")) {
+    await ensureClientOrderIdIndex(db.collection("orders"));
   }
 
   const [{ default: Table }, { default: MenuItem }, { default: Order }, { default: TableSession }, { default: Employee }] =

@@ -45,7 +45,10 @@ const orderSchema = new Schema(
   { timestamps: true }
 );
 
-orderSchema.index({ restaurantId: 1, clientOrderId: 1 }, { unique: true });
+orderSchema.index(
+  { restaurantId: 1, clientOrderId: 1 },
+  { unique: true, partialFilterExpression: { clientOrderId: { $type: "string" } } }
+);
 orderSchema.index({ restaurantId: 1, createdAt: -1 });
 orderSchema.index({ restaurantId: 1, sessionId: 1 });
 orderSchema.plugin(tenantPlugin);
