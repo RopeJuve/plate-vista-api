@@ -98,8 +98,8 @@ const publishMenu = (restaurantId, data) => {
 export const updateMenuItem = async (restaurantId, id, input) => {
   const patch = { ...input };
   if (patch.price != null) {
-    patch.price = currency(patch.price).value;
-    patch.priceCents = toCents(patch.price);
+    patch.price = currency(input.price).value;
+    patch.priceCents = toCents(input.price);
   }
   const keys = Object.keys(patch);
   if (keys.length === 0) return getMenuItem(restaurantId, id);
