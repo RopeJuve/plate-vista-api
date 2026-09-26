@@ -44,6 +44,15 @@ export const emitRestaurant = (restaurantId, message) => {
   }
 };
 
+export const roomSize = (room) => rooms.get(room)?.size || 0;
+
+export const closeRoom = (room, code, reason) => {
+  const members = [...(rooms.get(room) || [])];
+  for (const socket of members) {
+    socket.close(code, reason);
+  }
+};
+
 export const resetRooms = () => {
   rooms.clear();
 };

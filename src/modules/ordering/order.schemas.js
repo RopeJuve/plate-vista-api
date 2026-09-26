@@ -5,26 +5,30 @@ const objectId = z
   .string()
   .regex(/^[a-f\d]{24}$/i, "must be a valid id");
 
+export const MAX_ITEMS = 50;
+export const MAX_QUANTITY = 99;
+export const MAX_NOTES = 200;
+
 export const orderItemSchema = z.object({
   productId: objectId,
   quantity: z
-    .number({ invalid_type_error: "quantity must be a positive integer less than 100" })
-    .int("quantity must be a positive integer less than 100")
-    .positive("quantity must be a positive integer less than 100")
-    .lt(100, "quantity must be a positive integer less than 100"),
-  notes: z.string().max(280).optional(),
+    .number({ invalid_type_error: "must be >= 1" })
+    .int("must be >= 1")
+    .min(1, "must be >= 1")
+    .max(MAX_QUANTITY, "must be <= 99"),
+  notes: z.string().max(MAX_NOTES, "must be at most 200 characters").optional(),
 });
 
 export const createOrderSchema = z.object({
   clientOrderId: z.string().uuid("clientOrderId must be a UUID"),
-  items: z.array(orderItemSchema).min(1).max(50),
+  items: z.array(orderItemSchema).min(1, "must contain at least 1 item").max(MAX_ITEMS, "must contain at most 50 items"),
   sessionId: objectId.optional(),
   tableId: objectId.optional(),
 });
 
 export const updateOrderSchema = z.object({
   orderId: objectId,
-  items: z.array(orderItemSchema).min(1).max(50),
+  items: z.array(orderItemSchema).min(1, "must contain at least 1 item").max(MAX_ITEMS, "must contain at most 50 items"),
 });
 
 export const statusOrderSchema = z.object({

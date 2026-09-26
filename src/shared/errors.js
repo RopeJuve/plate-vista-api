@@ -5,6 +5,7 @@ export const ErrorCodes = {
   FORBIDDEN: "FORBIDDEN",
   INVALID_TRANSITION: "INVALID_TRANSITION",
   SESSION_CLOSED: "SESSION_CLOSED",
+  RATE_LIMITED: "RATE_LIMITED",
   INTERNAL: "INTERNAL",
 };
 
@@ -15,15 +16,17 @@ const STATUS_BY_CODE = {
   FORBIDDEN: 403,
   INVALID_TRANSITION: 409,
   SESSION_CLOSED: 409,
+  RATE_LIMITED: 429,
   INTERNAL: 500,
 };
 
 export class AppError extends Error {
-  constructor(code, message, status) {
+  constructor(code, message, status, details) {
     super(message);
     this.name = "AppError";
     this.code = code;
     this.status = status ?? STATUS_BY_CODE[code] ?? 500;
+    if (details !== undefined) this.details = details;
   }
 }
 

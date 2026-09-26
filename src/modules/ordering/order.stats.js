@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import Order from "./order.model.js";
 import currency from "currency.js";
+import { AppError } from "../../shared/errors.js";
 
 const asId = (value) => new mongoose.Types.ObjectId(String(value));
 
@@ -95,6 +96,7 @@ export const getUserOrders = async (restaurantId, userId) => {
   const orders = await Order.find({ restaurantId, userId, status: { $ne: "cancelled" } })
     .sort({ createdAt: -1 })
     .lean();
+  if (orders.length === 0) throw new AppError("NOT_FOUND", "Not found", 404);
   return orders;
 };
 

@@ -7,6 +7,8 @@ import { randomUUID } from "node:crypto";
 import { ZodError } from "zod";
 import { connectToDatabase } from "./db/db.js";
 import { AppError, isDuplicateKey } from "./shared/errors.js";
+import { generateWsTicket } from "./shared/auth.js";
+import { requireAuth } from "./modules/staff/auth.middleware.js";
 import { captureException, initSentry, logger } from "./shared/logger.js";
 import userPassport from "./modules/staff/userPassport.js";
 import employeePassport from "./modules/staff/employeePassport.js";
@@ -64,6 +66,10 @@ app.get("/health", async (_req, res) => {
   }
 });
 
+app.post("/api/v1/ws-ticket", requireAuth, (req, res) => {
+  res.status(200).json({ ticket: generateWsTicket(req.user), expiresIn: 60 });
+});
+
 app.use("/api/v1/employee", employeeRouter);
 app.use("/api/v1/users", userRouter);
 app.use("/api/v1/auth", authRouter);
@@ -87,7 +93,9 @@ app.use((err, req, res, _next) => {
   );
   captureException(err);
   if (err instanceof AppError) {
-    return res.status(err.status).json({ code: err.code, message: err.message });
+    const body = { code: err.code, message: err.message };
+    if (err.details) body.details = err.details;
+    return res.status(err.status).json(body);
   }
   if (err instanceof ZodError) {
     return res.status(400).json({ message: err.issues[0]?.message || "Invalid request" });

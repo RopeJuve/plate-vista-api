@@ -6,7 +6,35 @@ import { publish } from "../../realtime/events.js";
 
 const toCents = (price) => currency(price).intValue;
 
+export const serializeMenuItem = (item) => {
+  const source = item?.toObject ? item.toObject() : item;
+  return {
+    _id: String(source._id),
+    title: source.title,
+    priceCents: source.priceCents,
+    inStock: Boolean(source.inStock),
+    category: source.category,
+    archived: Boolean(source.archived),
+  };
+};
+
 const visible = { archived: false };
+
+const toPublicMenu = (item) => {
+  const source = item?.toObject ? item.toObject() : item;
+  return {
+    _id: String(source._id),
+    title: source.title,
+    description: source.description,
+    price: currency(source.priceCents ?? 0, { fromCents: true }).value,
+    priceCents: source.priceCents,
+    image: source.image,
+    category: source.category,
+    inStock: Boolean(source.inStock),
+    station: source.station || "kitchen",
+    popular: Boolean(source.popular),
+  };
+};
 
 const toDTO = (item) => {
   const source = item.toObject ? item.toObject() : item;
@@ -49,6 +77,7 @@ export const createMenuItem = async (restaurantId, input) => {
       popular: input.popular ?? false,
       inStock: input.inStock ?? true,
     });
+    publishMenu(restaurantId, serializeMenuItem(item));
     return toDTO(item);
   } catch (error) {
     if (isDuplicateKey(error)) {
@@ -81,13 +110,7 @@ export const updateMenuItem = async (restaurantId, id, input) => {
     { new: true, runValidators: true }
   );
   if (!item) throw new AppError("NOT_FOUND", "Not found", 404);
-  if (Object.prototype.hasOwnProperty.call(input, "inStock")) {
-    publishMenu(restaurantId, {
-      menuItemId: item._id,
-      inStock: item.inStock,
-      title: item.title,
-    });
-  }
+  publishMenu(restaurantId, serializeMenuItem(item));
   return toDTO(item);
 };
 
@@ -98,12 +121,7 @@ export const archiveMenuItem = async (restaurantId, id) => {
     { new: true }
   );
   if (!item) throw new AppError("NOT_FOUND", "Not found", 404);
-  publishMenu(restaurantId, {
-    menuItemId: item._id,
-    inStock: false,
-    archived: true,
-    title: item.title,
-  });
+  publishMenu(restaurantId, serializeMenuItem(item));
   return item;
 };
 
@@ -113,7 +131,8 @@ export const listBySlug = async (slug, category) => {
     status: "active",
   });
   if (!restaurant) throw new AppError("NOT_FOUND", "Not found", 404);
-  return listMenuItems(restaurant._id, category);
+  const items = await listMenuItems(restaurant._id, category);
+  return items.map((item) => toPublicMenu(item));
 };
 
 export const getBySlug = async (slug, id) => {
@@ -122,5 +141,5 @@ export const getBySlug = async (slug, id) => {
     status: "active",
   });
   if (!restaurant) throw new AppError("NOT_FOUND", "Not found", 404);
-  return getMenuItem(restaurant._id, id);
+  return toPublicMenu(await getMenuItem(restaurant._id, id));
 };

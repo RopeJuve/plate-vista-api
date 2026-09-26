@@ -14,41 +14,9 @@ import {
   updateOrderSchema,
 } from "./order.schemas.js";
 import { assertOpenSession, openOrJoinSession } from "./session.service.js";
+import { serializeOrder, serializeSession } from "./serialize.js";
 
-const idOf = (value) => (value == null ? null : String(value));
-
-export const toOrderDTO = (order) => {
-  const source = order.toObject ? order.toObject() : order;
-  return {
-    id: idOf(source._id),
-    _id: idOf(source._id),
-    restaurantId: idOf(source.restaurantId),
-    tableId: idOf(source.tableId),
-    sessionId: idOf(source.sessionId),
-    clientOrderId: source.clientOrderId,
-    userId: idOf(source.userId),
-    items: (source.items || []).map((item) => ({
-      productId: idOf(item.productId),
-      title: item.title,
-      unitPriceCents: item.unitPriceCents,
-      quantity: item.quantity,
-      lineTotalCents: item.lineTotalCents,
-      notes: item.notes || "",
-      status: item.status,
-      station: item.station,
-    })),
-    totalCents: source.totalCents,
-    status: source.status,
-    statusHistory: (source.statusHistory || []).map((entry) => ({
-      status: entry.status,
-      at: entry.at,
-      byEmployeeId: idOf(entry.byEmployeeId),
-    })),
-    cancelReason: source.cancelReason || null,
-    createdAt: source.createdAt,
-    updatedAt: source.updatedAt,
-  };
-};
+export { serializeOrder };
 
 const runTransaction = async (work) => {
   const mongoSession = await mongoose.startSession();
@@ -63,6 +31,14 @@ const publishOrder = (restaurantId, sessionId, event, data) => {
   publish({
     restaurantId,
     sessionId,
+    message: { type: "event", event, data },
+  });
+};
+
+const publishStaff = (restaurantId, event, data) => {
+  publish({
+    restaurantId,
+    audience: "staff",
     message: { type: "event", event, data },
   });
 };
@@ -83,19 +59,21 @@ const logFailure = (ctx, sessionId, error) => {
 const resolveSession = async (ctx, payload, mongoSession) => {
   if (ctx.actor?.type === "guest") {
     const session = await assertBoundGuestSession(ctx, mongoSession);
-    return session;
+    return { session, opened: false, tableNumber: null };
   }
   if (payload.sessionId) {
     const session = await TableSessionFind(ctx.restaurantId, payload.sessionId, mongoSession);
     if (session.status !== "open") {
       throw new AppError("SESSION_CLOSED", "Session is closed");
     }
-    return session;
+    return { session, opened: false, tableNumber: null };
   }
   if (payload.tableId) {
     return openOrJoinSession(ctx.restaurantId, payload.tableId, mongoSession);
   }
-  throw new AppError("VALIDATION", "sessionId or tableId is required");
+  throw new AppError("VALIDATION", "sessionId or tableId is required", 400, {
+    fields: { tableId: "sessionId or tableId is required" },
+  });
 };
 
 const TableSessionFind = async (restaurantId, sessionId, mongoSession) => {
@@ -143,14 +121,20 @@ export const createOrder = async (ctx, input) => {
     const payload = parseOrThrow(createOrderSchema, input);
     sessionId = sessionId || payload.sessionId || null;
     const existing = await findExisting(ctx.restaurantId, payload.clientOrderId);
-    if (existing) return { order: toOrderDTO(existing), replayed: true };
+    if (existing) return { order: serializeOrder(existing), replayed: true };
 
     let saved;
+    let openedMeta = null;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
         saved = await runTransaction(async (mongoSession) => {
-          const session = await resolveSession(ctx, payload, mongoSession);
+          openedMeta = null;
+          const resolved = await resolveSession(ctx, payload, mongoSession);
+          const session = resolved.session;
           sessionId = String(session._id);
+          if (resolved.opened) {
+            openedMeta = { session, tableNumber: resolved.tableNumber };
+          }
           const priced = await priceItems(ctx.restaurantId, payload.items, mongoSession);
           const byEmployeeId = ctx.actor?.type === "employee" ? ctx.actor.id : null;
           const [order] = await Order.create(
@@ -167,6 +151,7 @@ export const createOrder = async (ctx, input) => {
                 items: priced.items,
                 totalCents: priced.totalCents,
                 status: "pending",
+                rev: 1,
                 statusHistory: [{ status: "pending", at: new Date(), byEmployeeId }],
               },
             ],
@@ -185,14 +170,19 @@ export const createOrder = async (ctx, input) => {
         const dup = duplicateKeyOn(error);
         if (dup === "clientOrderId" || dup === "unknown") {
           const again = await findExisting(ctx.restaurantId, payload.clientOrderId);
-          if (again) return { order: toOrderDTO(again), replayed: true };
+          if (again) return { order: serializeOrder(again), replayed: true };
         }
         if (dup === "tableId" && attempt < 2) continue;
         throw error;
       }
     }
 
-    const order = toOrderDTO(saved);
+    const order = serializeOrder(saved);
+    if (openedMeta) {
+      publishStaff(ctx.restaurantId, "session.opened", {
+        session: serializeSession(openedMeta.session, openedMeta.tableNumber),
+      });
+    }
     publishOrder(ctx.restaurantId, order.sessionId, "order.created", { order });
     return { order, replayed: false };
   } catch (error) {
@@ -214,14 +204,19 @@ export const updateOrder = async (ctx, input) => {
       }).session(mongoSession);
       if (!current) throw new AppError("NOT_FOUND", "Not found", 404);
       sessionId = String(current.sessionId);
-      if (current.status !== "pending") {
-        throw new AppError("INVALID_TRANSITION", "Only pending orders can be edited");
-      }
       if (ctx.actor?.type === "guest" && String(current.sessionId) !== String(ctx.actor.sessionId)) {
-        throw new AppError("FORBIDDEN", "Forbidden");
+        throw new AppError("NOT_FOUND", "Not found", 404);
       }
       if (ctx.actor?.type === "guest") {
         await assertBoundGuestSession(ctx, mongoSession);
+      }
+      if (current.status !== "pending") {
+        throw new AppError(
+          "INVALID_TRANSITION",
+          "Only pending orders can be edited",
+          undefined,
+          { from: current.status, to: "pending" }
+        );
       }
       const priced = await priceItems(ctx.restaurantId, payload.items, mongoSession);
       const previous = quantityMap(current.items, "productId");
@@ -231,13 +226,21 @@ export const updateOrder = async (ctx, input) => {
         productId,
         delta: (next.get(productId) || 0) - (previous.get(productId) || 0),
       }));
-      current.items = priced.items;
-      current.totalCents = priced.totalCents;
-      await current.save({ session: mongoSession });
+      const updated = await Order.findOneAndUpdate(
+        { _id: current._id, restaurantId: ctx.restaurantId, status: "pending" },
+        { $set: { items: priced.items, totalCents: priced.totalCents }, $inc: { rev: 1 } },
+        { new: true, session: mongoSession }
+      );
+      if (!updated) {
+        throw new AppError("INVALID_TRANSITION", "Only pending orders can be edited", undefined, {
+          from: current.status,
+          to: "pending",
+        });
+      }
       await stock.adjust(deltas, ctx.restaurantId, mongoSession);
-      return current;
+      return updated;
     });
-    const dto = toOrderDTO(order);
+    const dto = serializeOrder(order);
     publishOrder(ctx.restaurantId, dto.sessionId, "order.updated", { order: dto });
     return { order: dto };
   } catch (error) {
@@ -249,34 +252,48 @@ export const updateOrder = async (ctx, input) => {
 export const changeStatus = async (ctx, input) => {
   let sessionId = ctx.actor?.sessionId || null;
   try {
-    if (ctx.actor?.type !== "employee") {
-      throw new AppError("FORBIDDEN", "Forbidden");
-    }
     const payload = parseOrThrow(statusOrderSchema, input);
     const order = await Order.findOne({
       _id: payload.orderId,
       restaurantId: ctx.restaurantId,
     });
     if (!order) throw new AppError("NOT_FOUND", "Not found", 404);
+    if (ctx.actor?.type !== "employee") {
+      throw new AppError("FORBIDDEN", "Forbidden");
+    }
     sessionId = String(order.sessionId);
     assertTransition(order.status, payload.status);
     if (payload.status === "cancelled") {
       return cancelOrder(ctx, { orderId: payload.orderId, reason: "Cancelled" });
     }
-    order.status = payload.status;
-    order.items.forEach((item) => {
-      item.status = payload.status;
-    });
-    order.statusHistory.push({
-      status: payload.status,
-      at: new Date(),
-      byEmployeeId: ctx.actor.id,
-    });
-    await order.save();
-    const dto = toOrderDTO(order);
+    const updated = await Order.findOneAndUpdate(
+      { _id: order._id, restaurantId: ctx.restaurantId, status: order.status },
+      {
+        $set: { status: payload.status, "items.$[].status": payload.status },
+        $push: {
+          statusHistory: {
+            status: payload.status,
+            at: new Date(),
+            byEmployeeId: ctx.actor.id,
+          },
+        },
+        $inc: { rev: 1 },
+      },
+      { new: true }
+    );
+    if (!updated) {
+      throw new AppError(
+        "INVALID_TRANSITION",
+        `Cannot change status from ${order.status} to ${payload.status}`,
+        undefined,
+        { from: order.status, to: payload.status }
+      );
+    }
+    const dto = serializeOrder(updated);
     publishOrder(ctx.restaurantId, dto.sessionId, "order.statusChanged", {
-      orderId: dto.id,
+      orderId: dto._id,
       status: dto.status,
+      rev: dto.rev,
     });
     return { order: dto };
   } catch (error) {
@@ -288,7 +305,7 @@ export const changeStatus = async (ctx, input) => {
 export const cancelOrder = async (ctx, input) => {
   let sessionId = ctx.actor?.sessionId || null;
   try {
-    if (ctx.actor?.type !== "employee") {
+    if (ctx.actor?.type !== "employee" && ctx.actor?.type !== "guest") {
       throw new AppError("FORBIDDEN", "Forbidden");
     }
     const payload = parseOrThrow(cancelOrderSchema, input);
@@ -299,30 +316,56 @@ export const cancelOrder = async (ctx, input) => {
       }).session(mongoSession);
       if (!current) throw new AppError("NOT_FOUND", "Not found", 404);
       sessionId = String(current.sessionId);
+      if (ctx.actor.type === "guest" && String(current.sessionId) !== String(ctx.actor.sessionId)) {
+        throw new AppError("NOT_FOUND", "Not found", 404);
+      }
+      if (ctx.actor.type === "guest") {
+        await assertBoundGuestSession(ctx, mongoSession);
+        if (current.status !== "pending") {
+          throw new AppError(
+            "INVALID_TRANSITION",
+            `Cannot change status from ${current.status} to cancelled`,
+            undefined,
+            { from: current.status, to: "cancelled" }
+          );
+        }
+      }
       assertTransition(current.status, "cancelled");
       await stock.adjust(
         current.items.map((item) => ({ productId: item.productId, delta: -item.quantity })),
         ctx.restaurantId,
         mongoSession
       );
-      current.status = "cancelled";
-      current.cancelReason = payload.reason || "";
-      current.cancelledBy = ctx.actor.id;
-      current.items.forEach((item) => {
-        item.status = "cancelled";
-      });
-      current.statusHistory.push({
-        status: "cancelled",
-        at: new Date(),
-        byEmployeeId: ctx.actor.id,
-      });
-      await current.save({ session: mongoSession });
-      return current;
+      const reason = payload.reason || "";
+      const updated = await Order.findOneAndUpdate(
+        { _id: current._id, restaurantId: ctx.restaurantId, status: current.status },
+        {
+          $set: {
+            status: "cancelled",
+            cancelReason: reason,
+            ...(ctx.actor.type === "employee" ? { cancelledBy: ctx.actor.id } : {}),
+            "items.$[].status": "cancelled",
+          },
+          $push: {
+            statusHistory: {
+              status: "cancelled",
+              at: new Date(),
+              byEmployeeId: ctx.actor.type === "employee" ? ctx.actor.id : null,
+            },
+          },
+          $inc: { rev: 1 },
+        },
+        { new: true, session: mongoSession }
+      );
+      if (!updated) throw new AppError("NOT_FOUND", "Not found", 404);
+      return updated;
     });
-    const dto = toOrderDTO(order);
+    const dto = serializeOrder(order);
     publishOrder(ctx.restaurantId, dto.sessionId, "order.statusChanged", {
-      orderId: dto.id,
+      orderId: dto._id,
       status: "cancelled",
+      rev: dto.rev,
+      reason: order.cancelReason || "",
     });
     return { order: dto };
   } catch (error) {
@@ -341,7 +384,7 @@ export const getSessionBill = async (ctx, sessionId) => {
   const totalCents = orders.reduce((sum, order) => sum + order.totalCents, 0);
   return {
     sessionId: String(sessionId),
-    orders: orders.map((order) => toOrderDTO(order)),
+    orders: orders.map((order) => serializeOrder(order)),
     totalCents,
   };
 };
@@ -356,7 +399,7 @@ const assertOpenOrAny = async (restaurantId, sessionId) => {
 export const getOrder = async (restaurantId, orderId) => {
   const order = await Order.findOne({ _id: orderId, restaurantId });
   if (!order) throw new AppError("NOT_FOUND", "Not found", 404);
-  return toOrderDTO(order);
+  return serializeOrder(order);
 };
 
 export const listOrders = async (restaurantId, { skip, limit }) => {
@@ -365,7 +408,7 @@ export const listOrders = async (restaurantId, { skip, limit }) => {
     Order.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
     Order.countDocuments(filter),
   ]);
-  return { orders: orders.map((order) => toOrderDTO(order)), total };
+  return { orders: orders.map((order) => serializeOrder(order)), total };
 };
 
 export const anonymizeUser = async (userId) => {

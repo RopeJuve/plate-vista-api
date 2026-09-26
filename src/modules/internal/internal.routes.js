@@ -7,6 +7,7 @@ const emitSchema = z.object({
   restaurantId: z.string().regex(/^[a-f\d]{24}$/i),
   sessionId: z.string().regex(/^[a-f\d]{24}$/i).optional(),
   fanout: z.boolean().optional(),
+  audience: z.enum(["staff"]).optional(),
   message: z.object({
     type: z.literal("event"),
     event: z.string().min(1),

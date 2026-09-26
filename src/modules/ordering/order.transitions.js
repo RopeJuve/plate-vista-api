@@ -23,7 +23,9 @@ export const assertTransition = (from, to) => {
   if (!allowed.includes(to)) {
     throw new AppError(
       "INVALID_TRANSITION",
-      `Cannot change status from ${from} to ${to}`
+      `Cannot change status from ${from} to ${to}`,
+      undefined,
+      { from, to }
     );
   }
 };

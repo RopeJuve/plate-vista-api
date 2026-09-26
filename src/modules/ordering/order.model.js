@@ -40,6 +40,7 @@ const orderSchema = new Schema(
     ],
     cancelReason: { type: String },
     cancelledBy: { type: Schema.Types.ObjectId, ref: "Employee" },
+    rev: { type: Number, default: 1, min: 1 },
   },
   { timestamps: true }
 );

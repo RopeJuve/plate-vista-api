@@ -26,6 +26,14 @@ export const generateToken = (user) => {
 export const verifyToken = (token) =>
   jwt.verify(token, process.env.JWT_SECRET, { algorithms: ["HS256"] });
 
+export const generateWsTicket = (claims) => {
+  const { iat, exp, nbf, purpose, ...rest } = claims || {};
+  return jwt.sign({ ...rest, purpose: "ws" }, process.env.JWT_SECRET, {
+    algorithm: "HS256",
+    expiresIn: 60,
+  });
+};
+
 // Guest tokens are bound to a table session. Closing that session makes
 // the token unusable even if it has not expired yet.
 export const generateTableToken = ({ restaurantId, tableId, sessionId, user }) => {

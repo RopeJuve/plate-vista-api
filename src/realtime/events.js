@@ -1,4 +1,4 @@
-import { emit, emitRestaurant, sessionRoom, staffRoom } from "./rooms.js";
+import { closeRoom, emit, emitRestaurant, sessionRoom, staffRoom } from "./rooms.js";
 import { logger } from "../shared/logger.js";
 
 export const published = [];
@@ -7,13 +7,18 @@ export const clearPublished = () => {
   published.length = 0;
 };
 
-export const deliverLocal = ({ restaurantId, sessionId, fanout, message }) => {
+export const deliverLocal = ({ restaurantId, sessionId, fanout, audience, message }) => {
   if (fanout) {
     emitRestaurant(String(restaurantId), message);
     return;
   }
   emit(staffRoom(restaurantId), message);
-  if (sessionId) emit(sessionRoom(restaurantId, sessionId), message);
+  if (sessionId && audience !== "staff") {
+    emit(sessionRoom(restaurantId, sessionId), message);
+  }
+  if (message?.event === "session.closed" && sessionId) {
+    closeRoom(sessionRoom(restaurantId, sessionId), 4004, "session closed");
+  }
 };
 
 const notifyRender = (envelope) => {

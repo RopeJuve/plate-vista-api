@@ -5,6 +5,7 @@ import Order from "./order.model.js";
 import TableSession from "./session.model.js";
 import { AppError, duplicateKeyOn } from "../../shared/errors.js";
 import { publish } from "../../realtime/events.js";
+import { serializeOrder, serializeSession } from "./serialize.js";
 
 export const openOrJoinSession = async (restaurantId, tableId, mongoSession) => {
   const existingQuery = TableSession.findOne({
@@ -14,7 +15,7 @@ export const openOrJoinSession = async (restaurantId, tableId, mongoSession) => 
   });
   if (mongoSession) existingQuery.session(mongoSession);
   const existing = await existingQuery;
-  if (existing) return existing;
+  if (existing) return { session: existing, opened: false, tableNumber: null };
 
   const tableQuery = Table.findOne({ _id: tableId, restaurantId });
   if (mongoSession) tableQuery.session(mongoSession);
@@ -40,13 +41,14 @@ export const openOrJoinSession = async (restaurantId, tableId, mongoSession) => 
   );
   if (mongoSession) occupy.session(mongoSession);
   await occupy;
-  return created;
+  return { session: created, opened: true, tableNumber: table.tableNumber };
 };
 
 export const openOrJoinSessionSafe = async (restaurantId, tableId) => {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      return await openOrJoinSession(restaurantId, tableId);
+      const opened = await openOrJoinSession(restaurantId, tableId);
+      return opened.session;
     } catch (error) {
       if (duplicateKeyOn(error) && attempt < 2) continue;
       throw error;
@@ -96,7 +98,7 @@ export const closeSession = async (ctx, sessionId) => {
         message: {
           type: "event",
           event: "session.closed",
-          data: { sessionId: closed._id, tableId: closed.tableId },
+          data: { sessionId: String(closed._id), tableId: String(closed.tableId) },
         },
       });
     }
@@ -120,5 +122,18 @@ export const getBoard = async (restaurantId) => {
       .select("tableNumber capacity status qrCode")
       .lean(),
   ]);
-  return { sessions, orders, tables };
+  const tableById = new Map(tables.map((table) => [String(table._id), table]));
+  return {
+    sessions: sessions.map((session) =>
+      serializeSession(session, tableById.get(String(session.tableId))?.tableNumber ?? null)
+    ),
+    orders: orders.map((order) => serializeOrder(order)),
+    tables: tables.map((table) => ({
+      _id: String(table._id),
+      tableNumber: table.tableNumber,
+      capacity: table.capacity,
+      status: table.status,
+      qrCode: table.qrCode,
+    })),
+  };
 };
