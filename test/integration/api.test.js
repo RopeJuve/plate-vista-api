@@ -12,20 +12,27 @@ let mongod;
 let app;
 let request;
 let Employee;
+let Restaurant;
 let generateToken;
 let hashPassword;
 
 test.before(async () => {
   mongod = await MongoMemoryServer.create();
   process.env.MONGO_DB_URL = mongod.getUri();
+  process.env.JWT_SECRET = "test-secret-for-integration-suite";
   process.env.PORT = "0";
   ({ default: request } = await import("supertest"));
-  ({ default: app } = await import("../../index.js"));
-  ({ default: Employee } = await import("../../models/employee.modal.js"));
-  ({ generateToken, hashPassword } = await import("../../utils/index.js"));
+  ({ default: app } = await import("../../src/app.js"));
+  ({ default: Employee } = await import("../../src/modules/staff/employee.model.js"));
+  ({ default: Restaurant } = await import("../../src/modules/restaurants/restaurant.model.js"));
+  ({ generateToken, hashPassword } = await import("../../src/shared/auth.js"));
+  const { connectToDatabase } = await import("../../src/db/db.js");
+  await connectToDatabase();
 });
 
 test.after(async () => {
+  const { disconnectDatabase } = await import("../../src/db/db.js");
+  await disconnectDatabase();
   await mongod?.stop();
 });
 
@@ -44,11 +51,17 @@ const registerUser = (overrides = {}) =>
 // out-of-band (DB script), which this fixture mirrors directly against
 // the model instead of going through the gated HTTP endpoint.
 const seedAdmin = async (overrides = {}) => {
+  const restaurant = await Restaurant.create({
+    name: "Testaurant",
+    slug: `test-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+  });
   const employee = await Employee.create({
+    restaurantId: restaurant._id,
     employee: "seed_admin",
     email: "seed_admin@example.com",
     password: await hashPassword("supersecret1"),
     position: "admin",
+    role: "admin",
     ...overrides,
   });
   return generateToken(employee);
@@ -117,60 +130,14 @@ test("mass assignment: numSold cannot be set through the update body", async () 
   assert.equal(updated.body.numSold, 0);
 });
 
-test("numSold stays correct under concurrent order creation", async () => {
-  const adminToken = await seedAdmin({ employee: "admin_dana" });
-
-  const item = await request(app)
-    .post("/api/v1/menu-items")
-    .set("Authorization", `Bearer ${adminToken}`)
-    .send({
-      title: "Concurrent Burger",
-      description: "desc",
-      price: 5,
-      image: "x.png",
-      category: "food",
-    });
-
-  const reg = await registerUser({
-    username: "concurrentUser",
-    email: "concurrent@example.com",
+test("REST order writes are not accepted", async () => {
+  const adminToken = await seedAdmin({
+    employee: "admin_dana",
+    email: "dana@example.com",
   });
-  const login = await request(app)
-    .post("/api/v1/auth/login")
-    .send({ username: "concurrentUser", password: "supersecret1" });
-  const userToken = login.headers.authorization.split(" ")[1];
-
-  const N = 10;
-  await Promise.all(
-    Array.from({ length: N }, () =>
-      request(app)
-        .post("/api/v1/orders")
-        .set("Authorization", `Bearer ${userToken}`)
-        .send({ menuItems: [{ product: item.body._id, quantity: 1 }] })
-    )
-  );
-
-  const refreshed = await request(app)
-    .get(`/api/v1/menu-items/${item.body._id}`)
-    .set("Authorization", `Bearer ${adminToken}`);
-  assert.equal(refreshed.body.numSold, N);
-});
-
-test("negative/fractional quantity is rejected", async () => {
-  const reg = await registerUser({
-    username: "erin4321",
-    email: "erin@example.com",
-  });
-  const login = await request(app)
-    .post("/api/v1/auth/login")
-    .send({ username: "erin4321", password: "supersecret1" });
-  const token = login.headers.authorization.split(" ")[1];
-
   const res = await request(app)
     .post("/api/v1/orders")
-    .set("Authorization", `Bearer ${token}`)
-    .send({
-      menuItems: [{ product: "507f1f77bcf86cd799439011", quantity: -1 }],
-    });
-  assert.equal(res.status, 400);
+    .set("Authorization", `Bearer ${adminToken}`)
+    .send({ menuItems: [{ product: "507f1f77bcf86cd799439011", quantity: -1 }] });
+  assert.equal(res.status, 405);
 });

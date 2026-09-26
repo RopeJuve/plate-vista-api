@@ -1,16 +1,10 @@
-import authRouter from "./authRouter.js";
-import userRouter from "./userRouter.js";
-import menuItemRouter from "./menuItemRouter.js";
-import orderRouter from "./orderRouter.js";
-import employeeRouter from "./employeeRouter.js";
-import tableRouter from "./tableRouter.js";
-import statisticsRouter from "./statisticsRouter.js";
-export {
-  authRouter,
-  userRouter,
-  menuItemRouter,
-  orderRouter,
-  employeeRouter,
-  tableRouter,
-  statisticsRouter
-};
+export { default as authRouter } from "../src/modules/staff/auth.routes.js";
+export { default as userRouter } from "../src/modules/staff/user.routes.js";
+export { default as menuItemRouter, publicMenuRouter } from "../src/modules/menu/menu.routes.js";
+export { default as orderRouter } from "../src/modules/ordering/order.routes.js";
+export { default as employeeRouter } from "../src/modules/staff/employee.routes.js";
+export { default as tableRouter } from "../src/modules/tables/table.routes.js";
+export { default as statisticsRouter } from "../src/modules/stats/stats.routes.js";
+export { default as sessionRouter } from "../src/modules/ordering/session.routes.js";
+export { default as staffRouter } from "../src/modules/staff/staff.routes.js";
+export { default as internalRouter } from "../src/modules/internal/internal.routes.js";

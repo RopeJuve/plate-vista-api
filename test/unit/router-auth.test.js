@@ -20,6 +20,10 @@ import {
   employeeRouter,
   tableRouter,
   statisticsRouter,
+  sessionRouter,
+  staffRouter,
+  internalRouter,
+  publicMenuRouter,
 } from "../../routes/index.js";
 
 const PLACEHOLDER_ID = "507f1f77bcf86cd799439011";
@@ -30,11 +34,12 @@ const PLACEHOLDER_ID = "507f1f77bcf86cd799439011";
 const PUBLIC_ROUTES = new Set([
   "auth POST /login",
   "auth POST /employee/login",
-  "auth POST /table/:tableNumber",
+  "auth POST /table/:qrCode",
+  "auth POST /register",
   "users POST /",
-  "menu-items GET /",
-  "menu-items GET /category",
-  "menu-items GET /:id",
+  "r GET /:slug/menu-items",
+  "r GET /:slug/menu-items/category",
+  "r GET /:slug/menu-items/:id",
 ]);
 
 const ROUTERS = {
@@ -45,6 +50,10 @@ const ROUTERS = {
   employee: employeeRouter,
   table: tableRouter,
   statistics: statisticsRouter,
+  sessions: sessionRouter,
+  staff: staffRouter,
+  internal: internalRouter,
+  r: publicMenuRouter,
 };
 
 const listRoutes = (router) => {

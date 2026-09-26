@@ -1,0 +1,66 @@
+import bcrypt from "bcrypt";
+import jwt from "jsonwebtoken";
+
+export const hashPassword = async (password) => {
+  const salt = await bcrypt.genSalt(10);
+  return bcrypt.hash(password, salt);
+};
+
+export const comparePassword = async (password, hashedPassword) =>
+  bcrypt.compare(password, hashedPassword);
+
+export const generateToken = (user) => {
+  const isEmployee = Boolean(user.position) || user.role === "owner";
+  const payload = isEmployee
+    ? { id: user._id, role: "employee", position: user.position || user.role }
+    : { id: user._id, role: "user" };
+  if (user.restaurantId) {
+    payload.restaurantId = String(user.restaurantId);
+  }
+  return jwt.sign(payload, process.env.JWT_SECRET, {
+    algorithm: "HS256",
+    expiresIn: "1h",
+  });
+};
+
+export const verifyToken = (token) =>
+  jwt.verify(token, process.env.JWT_SECRET, { algorithms: ["HS256"] });
+
+// Guest tokens are bound to a table session. Closing that session makes
+// the token unusable even if it has not expired yet.
+export const generateTableToken = ({ restaurantId, tableId, sessionId, user }) => {
+  const payload = {
+    role: "guest",
+    restaurantId: String(restaurantId),
+    tableId: String(tableId),
+    sessionId: String(sessionId),
+  };
+  if (user?._id) payload.userId = String(user._id);
+  return jwt.sign(payload, process.env.JWT_SECRET, {
+    algorithm: "HS256",
+    expiresIn: "4h",
+  });
+};
+
+export const sanitizedUser = (user) => {
+  const { password, __v, ...rest } = user._doc || user;
+  return rest;
+};
+
+export const sanitizedUsers = (users) => users.map((user) => sanitizedUser(user));
+
+export const parsePagination = (query) => {
+  const page = Math.max(Number.parseInt(query.page, 10) || 1, 1);
+  const limit = Math.min(Math.max(Number.parseInt(query.limit, 10) || 20, 1), 100);
+  return { page, limit, skip: (page - 1) * limit };
+};
+
+export const pick = (source, allowedKeys) => {
+  const result = {};
+  allowedKeys.forEach((key) => {
+    if (source && Object.prototype.hasOwnProperty.call(source, key)) {
+      result[key] = source[key];
+    }
+  });
+  return result;
+};

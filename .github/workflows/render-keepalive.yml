@@ -1,0 +1,22 @@
+name: render-keepalive
+
+# Optional. Pings Render /health every 10 minutes during typical opening hours
+# so the free instance is less likely to sleep. Uses free-tier hours.
+on:
+  schedule:
+    - cron: "*/10 10-22 * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Render health
+        env:
+          RENDER_HEALTH_URL: ${{ secrets.RENDER_HEALTH_URL }}
+        run: |
+          if [ -z "$RENDER_HEALTH_URL" ]; then
+            echo "RENDER_HEALTH_URL is not set; skipping"
+            exit 0
+          fi
+          curl --fail --silent --show-error --max-time 20 "$RENDER_HEALTH_URL"

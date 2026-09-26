@@ -11,11 +11,6 @@ import {
   sanitizedUsers,
   pick,
   parsePagination,
-  assertValidMenuItems,
-  calculateTotal,
-  incrementSoldCounts,
-  updatedOrder,
-  OrderError,
 } from "../../utils/index.js";
 
 const oid = () => new mongoose.Types.ObjectId();
@@ -37,6 +32,13 @@ test("generateToken/verifyToken: employee token carries role and position", () =
   const decoded = verifyToken(token);
   assert.equal(decoded.role, "employee");
   assert.equal(decoded.position, "admin");
+});
+
+test("generateToken includes restaurantId when the employee belongs to one", () => {
+  const id = oid();
+  const restaurantId = oid();
+  const decoded = verifyToken(generateToken({ _id: id, position: "admin", restaurantId }));
+  assert.equal(decoded.restaurantId, restaurantId.toString());
 });
 
 test("verifyToken rejects a token signed with the wrong secret", () => {
@@ -71,7 +73,7 @@ test("sanitizedUsers maps a list the same way", () => {
 });
 
 test("pick only keeps whitelisted keys (mass-assignment guard)", () => {
-  const body = { title: "Pizza", price: 10, numSold: 9999, __proto__: {} };
+  const body = { title: "Pizza", price: 10, numSold: 9999 };
   const result = pick(body, ["title", "price"]);
   assert.deepEqual(result, { title: "Pizza", price: 10 });
   assert.equal(result.numSold, undefined);
@@ -99,177 +101,4 @@ test("parsePagination computes skip from page/limit", () => {
     limit: 10,
     skip: 20,
   });
-});
-
-test("assertValidMenuItems accepts a well-formed list", () => {
-  assert.doesNotThrow(() =>
-    assertValidMenuItems([{ product: oid().toString(), quantity: 2 }])
-  );
-});
-
-test("assertValidMenuItems rejects an empty/non-array list", () => {
-  assert.throws(() => assertValidMenuItems([]), OrderError);
-  assert.throws(() => assertValidMenuItems(null), OrderError);
-});
-
-test("assertValidMenuItems rejects more than 50 items", () => {
-  const items = Array.from({ length: 51 }, () => ({
-    product: oid().toString(),
-    quantity: 1,
-  }));
-  assert.throws(() => assertValidMenuItems(items), OrderError);
-});
-
-test("assertValidMenuItems rejects a non-MongoId product", () => {
-  assert.throws(
-    () => assertValidMenuItems([{ product: "not-an-id", quantity: 1 }]),
-    OrderError
-  );
-});
-
-test("assertValidMenuItems rejects zero/negative/non-integer/too-large quantity", () => {
-  const p = oid().toString();
-  for (const quantity of [0, -1, 1.5, 100, "5"]) {
-    assert.throws(
-      () => assertValidMenuItems([{ product: p, quantity }]),
-      OrderError,
-      `quantity ${quantity} should be rejected`
-    );
-  }
-});
-
-// --- calculateTotal is documented as pure: it must never write to the DB. ---
-
-const fakeMenuItemModel = (items) => ({
-  findById: async (id) => items.find((i) => i._id === id) || null,
-  updateOne: async () => {},
-});
-
-test("calculateTotal computes the sum of price * quantity", async () => {
-  const model = fakeMenuItemModel([
-    { _id: "a", price: 10, inStock: true },
-    { _id: "b", price: 2.5, inStock: true },
-  ]);
-  const total = await calculateTotal(
-    [
-      { product: "a", quantity: 2 },
-      { product: "b", quantity: 4 },
-    ],
-    model
-  );
-  assert.equal(total, 30); // 10*2 + 2.5*4
-});
-
-test("calculateTotal never mutates the menu items it reads (no save/updateOne available)", async () => {
-  // If calculateTotal tried to call .save() or model.updateOne(), this
-  // would throw since neither exists on the fake docs/model - proving the
-  // find -> mutate -> save numSold bug is gone.
-  const model = fakeMenuItemModel([{ _id: "a", price: 5, inStock: true }]);
-  const total = await calculateTotal([{ product: "a", quantity: 1 }], model);
-  assert.equal(total, 5);
-});
-
-test("calculateTotal throws a 404 OrderError for a missing menu item", async () => {
-  const model = fakeMenuItemModel([]);
-  await assert.rejects(
-    () => calculateTotal([{ product: "missing", quantity: 1 }], model),
-    (err) => err instanceof OrderError && err.status === 404
-  );
-});
-
-test("calculateTotal throws a 409 OrderError for an out-of-stock item", async () => {
-  const model = fakeMenuItemModel([{ _id: "a", price: 5, inStock: false }]);
-  await assert.rejects(
-    () => calculateTotal([{ product: "a", quantity: 1 }], model),
-    (err) => err instanceof OrderError && err.status === 409
-  );
-});
-
-test("incrementSoldCounts issues one atomic $inc per item", async () => {
-  const calls = [];
-  const model = {
-    updateOne: async (filter, update) => calls.push({ filter, update }),
-  };
-  await incrementSoldCounts(
-    [
-      { product: "a", quantity: 2 },
-      { product: "b", quantity: 3 },
-    ],
-    model
-  );
-  assert.equal(calls.length, 2);
-  assert.deepEqual(calls[0], {
-    filter: { _id: "a" },
-    update: { $inc: { numSold: 2 } },
-  });
-  assert.deepEqual(calls[1], {
-    filter: { _id: "b" },
-    update: { $inc: { numSold: 3 } },
-  });
-});
-
-// --- updatedOrder regression tests (the plan's documented bugs) ---
-
-const fakeOrder = (menuItems, totalPrice = 0) => ({
-  menuItems,
-  totalPrice,
-  save: async function () {
-    return this;
-  },
-});
-
-test("updatedOrder throws instead of referencing an undefined `res` (ReferenceError regression)", async () => {
-  const order = fakeOrder([]);
-  const model = fakeMenuItemModel([]);
-  await assert.rejects(
-    () => updatedOrder(order, { menuItems: [] }, model),
-    OrderError
-  );
-});
-
-test("updatedOrder merges ALL new items, not just menuItems[0]", async () => {
-  const model = fakeMenuItemModel([
-    { _id: "a", price: 10, inStock: true },
-    { _id: "b", price: 20, inStock: true },
-  ]);
-  const order = fakeOrder([]);
-  const result = await updatedOrder(
-    order,
-    {
-      menuItems: [
-        { product: "a", quantity: 1 },
-        { product: "b", quantity: 1 },
-      ],
-    },
-    model
-  );
-  const productIds = result.menuItems.map((i) => i.product).sort();
-  assert.deepEqual(productIds, ["a", "b"]);
-});
-
-test("updatedOrder recomputes totalPrice from the merged list, not a stale delta", async () => {
-  const model = fakeMenuItemModel([{ _id: "a", price: 10, inStock: true }]);
-  // Order already has 1x "a" (total 10, matching an existing totalPrice of
-  // 10) and the request adds 2 more of the same item.
-  const order = fakeOrder([{ product: "a", quantity: 1 }], 10);
-  const result = await updatedOrder(
-    order,
-    { menuItems: [{ product: "a", quantity: 2 }] },
-    model
-  );
-  assert.equal(result.menuItems.length, 1);
-  assert.equal(result.menuItems[0].quantity, 3);
-  assert.equal(result.totalPrice, 30); // 3 * 10, recomputed - not 10 + 10 (a delta bug)
-});
-
-test("updatedOrder works whether existing order.menuItems.product is populated or a bare id", async () => {
-  const model = fakeMenuItemModel([{ _id: "a", price: 10, inStock: true }]);
-  const order = fakeOrder([{ product: { _id: "a" }, quantity: 1 }], 10);
-  const result = await updatedOrder(
-    order,
-    { menuItems: [{ product: "a", quantity: 1 }] },
-    model
-  );
-  assert.equal(result.menuItems.length, 1);
-  assert.equal(result.menuItems[0].quantity, 2);
 });
