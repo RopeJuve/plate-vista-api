@@ -15,8 +15,17 @@ const schema = z
     NODE_ENV: z.string().optional(),
     LOG_LEVEL: z.string().optional(),
     SENTRY_DSN: z.string().optional(),
+    TRUST_PROXY: z.coerce.number().int().min(0).optional(),
+    ALLOW_LEGACY_WS_TOKEN: z.enum(["true", "false"]).default("true"),
   })
   .superRefine((value, ctx) => {
+    if (value.DEPLOY_TARGET !== "local" && !value.CORS_ORIGIN) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["CORS_ORIGIN"],
+        message: `CORS_ORIGIN is required when DEPLOY_TARGET=${value.DEPLOY_TARGET}`,
+      });
+    }
     if (value.DEPLOY_TARGET === "vercel") {
       if (!value.RENDER_INTERNAL_URL) {
         ctx.addIssue({
@@ -54,6 +63,8 @@ export const loadEnv = (source = process.env) => {
     NODE_ENV: emptyToUndefined(source.NODE_ENV),
     LOG_LEVEL: emptyToUndefined(source.LOG_LEVEL),
     SENTRY_DSN: emptyToUndefined(source.SENTRY_DSN),
+    TRUST_PROXY: emptyToUndefined(source.TRUST_PROXY),
+    ALLOW_LEGACY_WS_TOKEN: emptyToUndefined(source.ALLOW_LEGACY_WS_TOKEN),
   };
   const parsed = schema.safeParse(normalized);
   if (!parsed.success) {

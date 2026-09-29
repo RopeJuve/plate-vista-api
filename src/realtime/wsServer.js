@@ -33,11 +33,20 @@ export const sweepDeadSockets = (clients) => {
   }
 };
 
+// Temporary switch while clients move to tickets. ?token= puts a long-lived
+// JWT in the URL, where proxies and logs keep it. Set
+// ALLOW_LEGACY_WS_TOKEN=false once no client sends it.
+export const legacyTokenAllowed = () => process.env.ALLOW_LEGACY_WS_TOKEN !== "false";
+
 const authenticate = (query) => {
   const ticket = typeof query.ticket === "string" ? query.ticket : "";
-  const legacy = typeof query.token === "string" ? query.token : "";
+  const legacy =
+    !ticket && typeof query.token === "string" && legacyTokenAllowed() ? query.token : "";
   if (!ticket && !legacy) {
     return { ok: false, code: 4003, reason: "forbidden" };
+  }
+  if (legacy) {
+    logger.warn("ws connected with deprecated ?token=; switch the client to ?ticket=");
   }
   let auth;
   try {

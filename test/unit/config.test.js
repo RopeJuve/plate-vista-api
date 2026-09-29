@@ -29,6 +29,29 @@ test("render requires the internal secret", () => {
     ...base,
     DEPLOY_TARGET: "render",
     INTERNAL_SECRET: "0123456789abcdef",
+    CORS_ORIGIN: "https://app.example.com",
   });
   assert.equal(env.DEPLOY_TARGET, "render");
+});
+
+test("a deployed target refuses to start without CORS_ORIGIN", () => {
+  for (const DEPLOY_TARGET of ["render", "vercel"]) {
+    assert.throws(
+      () =>
+        loadEnv({
+          ...base,
+          DEPLOY_TARGET,
+          INTERNAL_SECRET: "0123456789abcdef",
+          RENDER_INTERNAL_URL: "https://render.example.com",
+        }),
+      /CORS_ORIGIN is required/
+    );
+  }
+  assert.deepEqual(loadEnv(base).corsOrigins, []);
+});
+
+test("legacy ws tokens stay allowed until switched off", () => {
+  assert.equal(loadEnv(base).ALLOW_LEGACY_WS_TOKEN, "true");
+  assert.equal(loadEnv({ ...base, ALLOW_LEGACY_WS_TOKEN: "false" }).ALLOW_LEGACY_WS_TOKEN, "false");
+  assert.throws(() => loadEnv({ ...base, ALLOW_LEGACY_WS_TOKEN: "yes" }));
 });

@@ -1,11 +1,14 @@
 import mongoose from "mongoose";
-import { nanoid } from "nanoid";
+import { customAlphabet } from "nanoid";
 import Table from "../tables/table.model.js";
 import Order from "./order.model.js";
 import TableSession from "./session.model.js";
 import { AppError, duplicateKeyOn } from "../../shared/errors.js";
 import { publish } from "../../realtime/events.js";
 import { serializeOrder, serializeSession } from "./serialize.js";
+
+// Short code guests read to each other at the table. No 0/O or 1/I.
+const newJoinCode = customAlphabet("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", 4);
 
 export const openOrJoinSession = async (restaurantId, tableId, mongoSession) => {
   const existingQuery = TableSession.findOne({
@@ -29,7 +32,7 @@ export const openOrJoinSession = async (restaurantId, tableId, mongoSession) => 
         tableId,
         status: "open",
         openedAt: new Date(),
-        code: nanoid(10),
+        code: newJoinCode(),
       },
     ],
     { session: mongoSession || undefined }
@@ -44,11 +47,15 @@ export const openOrJoinSession = async (restaurantId, tableId, mongoSession) => 
   return { session: created, opened: true, tableNumber: table.tableNumber };
 };
 
-export const openOrJoinSessionSafe = async (restaurantId, tableId) => {
+export const openOrJoinSessionSafe = async (restaurantId, tableId) =>
+  (await openOrJoinSessionWithRetry(restaurantId, tableId)).session;
+
+// Returns { session, opened } so the caller knows whether this request opened
+// the session (first guest) or joined one that was already open.
+export const openOrJoinSessionWithRetry = async (restaurantId, tableId) => {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      const opened = await openOrJoinSession(restaurantId, tableId);
-      return opened.session;
+      return await openOrJoinSession(restaurantId, tableId);
     } catch (error) {
       if (duplicateKeyOn(error) && attempt < 2) continue;
       throw error;
@@ -57,9 +64,16 @@ export const openOrJoinSessionSafe = async (restaurantId, tableId) => {
   throw new AppError("INTERNAL", "Could not open session");
 };
 
-export const assertOpenSession = async (restaurantId, sessionId) => {
-  const session = await TableSession.findOne({ _id: sessionId, restaurantId });
+export const findSession = async (restaurantId, sessionId, mongoSession) => {
+  const query = TableSession.findOne({ _id: sessionId, restaurantId });
+  if (mongoSession) query.session(mongoSession);
+  const session = await query;
   if (!session) throw new AppError("NOT_FOUND", "Not found", 404);
+  return session;
+};
+
+export const assertOpenSession = async (restaurantId, sessionId) => {
+  const session = await findSession(restaurantId, sessionId);
   if (session.status !== "open") {
     throw new AppError("SESSION_CLOSED", "Session is closed");
   }
@@ -108,31 +122,75 @@ export const closeSession = async (ctx, sessionId) => {
   }
 };
 
+// The open session is the source of truth for "occupied"; the stored status
+// can be stale (set by older code, or a close that never reached the table).
+export const tableStatus = (table, openTableIds) => {
+  if (openTableIds.has(String(table._id))) return "occupied";
+  return table.status === "reserved" ? "reserved" : "vacant";
+};
+
+export const RECENTLY_CLOSED_MS = 12 * 60 * 60 * 1000;
+
+const billTotals = async (restaurantId, sessionIds) => {
+  if (sessionIds.length === 0) return new Map();
+  const rows = await Order.aggregate([
+    {
+      $match: {
+        restaurantId: new mongoose.Types.ObjectId(String(restaurantId)),
+        sessionId: { $in: sessionIds },
+        status: { $ne: "cancelled" },
+      },
+    },
+    { $group: { _id: "$sessionId", totalCents: { $sum: "$totalCents" } } },
+  ]);
+  return new Map(rows.map((row) => [String(row._id), row.totalCents]));
+};
+
 export const getBoard = async (restaurantId) => {
-  const sessions = await TableSession.find({ restaurantId, status: "open" }).lean();
+  const [sessions, closed] = await Promise.all([
+    TableSession.find({ restaurantId, status: "open" }).lean(),
+    TableSession.find({
+      restaurantId,
+      status: "closed",
+      closedAt: { $gte: new Date(Date.now() - RECENTLY_CLOSED_MS) },
+    })
+      .sort({ closedAt: -1 })
+      .limit(50)
+      .lean(),
+  ]);
   const sessionIds = sessions.map((session) => session._id);
-  const tableIds = sessions.map((session) => session.tableId);
-  const [orders, tables] = await Promise.all([
+  const [orders, tables, closedTotals] = await Promise.all([
     Order.find({
       restaurantId,
       sessionId: { $in: sessionIds },
       status: { $ne: "cancelled" },
     }).lean(),
-    Table.find({ restaurantId, _id: { $in: tableIds } })
+    // Every table: the floor plan shows free tables too, not only seated ones.
+    Table.find({ restaurantId })
       .select("tableNumber capacity status qrCode")
       .lean(),
+    billTotals(restaurantId, closed.map((session) => session._id)),
   ]);
   const tableById = new Map(tables.map((table) => [String(table._id), table]));
+  const tableNumberOf = (session) => tableById.get(String(session.tableId))?.tableNumber ?? null;
+  const openTableIds = new Set(sessions.map((session) => String(session.tableId)));
   return {
-    sessions: sessions.map((session) =>
-      serializeSession(session, tableById.get(String(session.tableId))?.tableNumber ?? null)
-    ),
+    // Staff see the join code so a waiter can tell guests who scan late.
+    sessions: sessions.map((session) => ({
+      ...serializeSession(session, tableNumberOf(session)),
+      joinCode: session.code,
+    })),
+    // Closed sessions keep their orders; fetch them with GET /sessions/:id/bill.
+    recentlyClosed: closed.map((session) => ({
+      ...serializeSession(session, tableNumberOf(session)),
+      totalCents: closedTotals.get(String(session._id)) || 0,
+    })),
     orders: orders.map((order) => serializeOrder(order)),
     tables: tables.map((table) => ({
       _id: String(table._id),
       tableNumber: table.tableNumber,
       capacity: table.capacity,
-      status: table.status,
+      status: tableStatus(table, openTableIds),
       qrCode: table.qrCode,
     })),
   };

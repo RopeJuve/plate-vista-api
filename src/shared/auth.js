@@ -9,6 +9,8 @@ export const hashPassword = async (password) => {
 export const comparePassword = async (password, hashedPassword) =>
   bcrypt.compare(password, hashedPassword);
 
+export const ACCESS_TOKEN_TTL_SECONDS = 60 * 60;
+
 export const generateToken = (user) => {
   const isEmployee = Boolean(user.position) || user.role === "owner";
   const payload = isEmployee
@@ -19,7 +21,7 @@ export const generateToken = (user) => {
   }
   return jwt.sign(payload, process.env.JWT_SECRET, {
     algorithm: "HS256",
-    expiresIn: "1h",
+    expiresIn: ACCESS_TOKEN_TTL_SECONDS,
   });
 };
 
@@ -61,14 +63,4 @@ export const parsePagination = (query) => {
   const page = Math.max(Number.parseInt(query.page, 10) || 1, 1);
   const limit = Math.min(Math.max(Number.parseInt(query.limit, 10) || 20, 1), 100);
   return { page, limit, skip: (page - 1) * limit };
-};
-
-export const pick = (source, allowedKeys) => {
-  const result = {};
-  allowedKeys.forEach((key) => {
-    if (source && Object.prototype.hasOwnProperty.call(source, key)) {
-      result[key] = source[key];
-    }
-  });
-  return result;
 };

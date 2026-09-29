@@ -27,9 +27,9 @@ GET /ws?v=2&ticket=<ws-jwt>
 GET /ws?v=2&token=<jwt>     # deprecated for one release; prefer ticket
 ```
 
-`POST /api/v1/ws-ticket` (authenticated) returns `{ "ticket": "<jwt>", "expiresIn": 60 }`. The ticket is a JWT with `purpose: "ws"`, the same claims as the caller, and a 60 second expiry. `/ws?ticket=` accepts only tokens whose `purpose` is `"ws"`. A normal API JWT is rejected. A ticket older than 60 seconds is rejected.
+`POST /api/v1/ws-ticket` (authenticated) returns `{ "ticket": "<jwt>", "expiresIn": 60 }`. The ticket is a JWT with `purpose: "ws"`, the same claims as the caller, and a 60 second expiry. `/ws?ticket=` accepts only tokens whose `purpose` is `"ws"`. A normal API JWT is rejected. A ticket older than 60 seconds is rejected at connect time; once connected, the socket stays open after the ticket expires.
 
-`?token=` still accepts an employee or guest API JWT. Do not send long-lived tokens in the URL after clients move to tickets.
+`?token=` still accepts an employee or guest API JWT while `ALLOW_LEGACY_WS_TOKEN` is not `false`. With `ALLOW_LEGACY_WS_TOKEN=false` it is closed with `4003`. Do not send long-lived tokens in the URL after clients move to tickets.
 
 The token is an employee JWT or a guest table JWT from `POST /api/v1/auth/table/:qrCode`. Rooms are taken from that token:
 
@@ -103,8 +103,9 @@ Staff snapshot of open sessions and their non-cancelled orders. Order objects ar
 
 ```jsonc
 {
-  "sessions": [/* Session */],
-  "orders": [/* Order */],
+  "sessions": [/* Session + "joinCode": "K7QM" */],
+  "recentlyClosed": [/* Session + "totalCents": 1800 — closed in the last 12 hours, newest first, max 50 */],
+  "orders": [/* Order — open sessions only */],
   "tables": [{
     "_id": "string",
     "tableNumber": 1,
@@ -114,6 +115,16 @@ Staff snapshot of open sessions and their non-cancelled orders. Order objects ar
   }]
 }
 ```
+
+### GET /api/v1/sessions/:id/bill
+
+Staff can read any session of their restaurant. A guest can read only the session in their table token. Works for open and closed sessions. Cancelled orders are excluded.
+
+```jsonc
+{ "sessionId": "string", "session": {/* Session */}, "orders": [/* Order */], "totalCents": 1800 }
+```
+
+An order that races a session close is rejected with `SESSION_CLOSED`; it never lands in a closed session.
 
 ## Client → server
 
@@ -164,7 +175,7 @@ An unknown `type` is `VALIDATION`. The 11th message within 10 seconds is `RATE_L
 ## Server → room
 
 ```json
-{ "type": "event", "event": "session.opened", "data": { "session": {} } }
+{ "type": "event", "event": "session.opened", "data": { "session": { "joinCode": "K7QM" } } }
 { "type": "event", "event": "order.created", "data": { "order": {} } }
 { "type": "event", "event": "order.updated", "data": { "order": {} } }
 { "type": "event", "event": "order.statusChanged", "data": { "orderId": "...", "status": "accepted", "rev": 2 } }

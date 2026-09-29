@@ -17,6 +17,7 @@ const sessionSchema = new Schema(
     },
     openedAt: { type: Date, default: Date.now },
     closedAt: { type: Date },
+    lastOrderAt: { type: Date },
     code: { type: String, required: true },
   },
   { timestamps: true }

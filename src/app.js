@@ -26,14 +26,35 @@ import internalRouter from "./modules/internal/internal.routes.js";
 void initSentry();
 
 const app = express();
-const corsOrigins = process.env.CORS_ORIGIN
-  ? process.env.CORS_ORIGIN.split(",").map((origin) => origin.trim()).filter(Boolean)
-  : undefined;
+const deployTarget = process.env.DEPLOY_TARGET || "local";
+const corsOrigins = (process.env.CORS_ORIGIN || "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+// Local development allows any origin. A deployed app without CORS_ORIGIN
+// allows none: Vercel imports this file without running loadEnv(), so the
+// env check alone would not catch a missing value there.
+const corsOrigin = () => {
+  if (corsOrigins.length) return corsOrigins;
+  if (deployTarget === "local") return true;
+  logger.error({ target: deployTarget }, "CORS_ORIGIN is not set; blocking cross-origin requests");
+  return false;
+};
+
+// Vercel and Render sit behind one proxy hop. Without this every client shares
+// the proxy's IP, so the rate limiters would throttle everyone together.
+const trustProxy = process.env.TRUST_PROXY
+  ? Number(process.env.TRUST_PROXY)
+  : deployTarget === "local"
+    ? 0
+    : 1;
+if (trustProxy > 0) app.set("trust proxy", trustProxy);
 
 app.use(helmet());
 app.use(
   cors({
-    origin: corsOrigins,
+    origin: corsOrigin(),
     exposedHeaders: ["authorization"],
   })
 );

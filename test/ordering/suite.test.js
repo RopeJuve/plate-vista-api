@@ -418,6 +418,332 @@ test("closing a session vacates the table and rejects the old guest token", asyn
   staff.ws.close();
 });
 
+test("an order racing a session close is rejected instead of landing in the closed session", async () => {
+  const place = await fixture();
+  const session = await openOrJoinSessionSafe(place.restaurant._id, place.table._id);
+  let fired = false;
+  // The waiter closes the table after the order is written but before its
+  // transaction commits.
+  stock.afterSave = async () => {
+    if (fired) return;
+    fired = true;
+    await closeSession(staffCtx(place), session._id);
+  };
+  try {
+    await assert.rejects(
+      () =>
+        createOrder(guestCtx(place, session), {
+          clientOrderId: randomUUID(),
+          items: itemsOf(place.item, 1),
+        }),
+      (error) => error.code === "SESSION_CLOSED"
+    );
+  } finally {
+    stock.afterSave = null;
+  }
+  assert.equal(
+    await Order.countDocuments({ restaurantId: place.restaurant._id, sessionId: session._id }),
+    0
+  );
+});
+
+test("a socket opened with a ws ticket outlives the ticket's expiry", async () => {
+  const place = await fixture();
+  const session = await openOrJoinSessionSafe(place.restaurant._id, place.table._id);
+  const ticket = jwt.sign(
+    {
+      role: "guest",
+      restaurantId: String(place.restaurant._id),
+      tableId: String(place.table._id),
+      sessionId: String(session._id),
+      purpose: "ws",
+    },
+    process.env.JWT_SECRET,
+    { algorithm: "HS256", expiresIn: 1 }
+  );
+  const guest = await openSocket(`ticket=${encodeURIComponent(ticket)}`);
+  await new Promise((resolve) => setTimeout(resolve, 1100));
+  const ack = await ask(guest, "order.create", {
+    clientOrderId: randomUUID(),
+    items: itemsOf(place.item, 1),
+  });
+  assert.equal(ack.ok, true);
+  assert.equal(guest.closeCode(), null);
+  guest.ws.close();
+});
+
+test("a closed session's bill stays readable by staff and its own guest and shows on the board", async () => {
+  const place = await fixture();
+  const placed = await createOrder(staffCtx(place), {
+    clientOrderId: randomUUID(),
+    tableId: String(place.table._id),
+    items: itemsOf(place.item, 2),
+  });
+  const sessionId = placed.order.sessionId;
+  await closeSession(staffCtx(place), sessionId);
+
+  const staffBill = await request(app)
+    .get(`/api/v1/sessions/${sessionId}/bill`)
+    .set("Authorization", `Bearer ${place.token}`);
+  assert.equal(staffBill.status, 200);
+  assert.equal(staffBill.body.session.status, "closed");
+  assert.equal(staffBill.body.orders.length, 1);
+  assert.equal(staffBill.body.totalCents, placed.order.totalCents);
+
+  const ownGuest = generateTableToken({
+    restaurantId: place.restaurant._id,
+    tableId: place.table._id,
+    sessionId,
+  });
+  const guestBill = await request(app)
+    .get(`/api/v1/sessions/${sessionId}/bill`)
+    .set("Authorization", `Bearer ${ownGuest}`);
+  assert.equal(guestBill.status, 200);
+  assert.equal(guestBill.body.totalCents, placed.order.totalCents);
+
+  const next = await openOrJoinSessionSafe(place.restaurant._id, place.table._id);
+  const otherGuest = generateTableToken({
+    restaurantId: place.restaurant._id,
+    tableId: place.table._id,
+    sessionId: next._id,
+  });
+  const peek = await request(app)
+    .get(`/api/v1/sessions/${sessionId}/bill`)
+    .set("Authorization", `Bearer ${otherGuest}`);
+  assert.equal(peek.status, 404);
+
+  const board = await request(app)
+    .get("/api/v1/staff/board")
+    .set("Authorization", `Bearer ${place.token}`);
+  const closedRow = board.body.recentlyClosed.find((row) => row._id === sessionId);
+  assert.equal(closedRow.totalCents, placed.order.totalCents);
+  assert.equal(closedRow.tableNumber, 1);
+  assert.equal(board.body.sessions.some((row) => row._id === sessionId), false);
+});
+
+test("refresh tokens rotate, detect reuse, and stop working after logout", async () => {
+  const place = await fixture();
+  const login = await request(app)
+    .post("/api/v1/auth/employee/login")
+    .send({ employee: place.employee.employee, password: "supersecret1" });
+  assert.equal(login.status, 200);
+  assert.equal(typeof login.body.accessToken, "string");
+  assert.equal(typeof login.body.refreshToken, "string");
+  assert.equal(login.body.expiresIn, 3600);
+  assert.equal(login.headers.authorization, `Bearer ${login.body.accessToken}`);
+
+  const refreshed = await request(app)
+    .post("/api/v1/auth/refresh")
+    .send({ refreshToken: login.body.refreshToken });
+  assert.equal(refreshed.status, 200);
+  assert.notEqual(refreshed.body.refreshToken, login.body.refreshToken);
+  const who = await request(app)
+    .get("/api/v1/auth/user")
+    .set("Authorization", `Bearer ${refreshed.body.accessToken}`);
+  assert.equal(who.body.user.restaurantId, String(place.restaurant._id));
+
+  // Replaying the rotated token is treated as theft and kills the family.
+  const replay = await request(app)
+    .post("/api/v1/auth/refresh")
+    .send({ refreshToken: login.body.refreshToken });
+  assert.equal(replay.status, 401);
+  const afterReplay = await request(app)
+    .post("/api/v1/auth/refresh")
+    .send({ refreshToken: refreshed.body.refreshToken });
+  assert.equal(afterReplay.status, 401);
+
+  const second = await request(app)
+    .post("/api/v1/auth/employee/login")
+    .send({ employee: place.employee.employee, password: "supersecret1" });
+  const logout = await request(app)
+    .post("/api/v1/auth/logout")
+    .send({ refreshToken: second.body.refreshToken });
+  assert.equal(logout.status, 204);
+  const afterLogout = await request(app)
+    .post("/api/v1/auth/refresh")
+    .send({ refreshToken: second.body.refreshToken });
+  assert.equal(afterLogout.status, 401);
+
+  const third = await request(app)
+    .post("/api/v1/auth/employee/login")
+    .send({ employee: place.employee.employee, password: "supersecret1" });
+  await Employee.deleteOne({ _id: place.employee._id, restaurantId: place.restaurant._id });
+  const deleted = await request(app)
+    .post("/api/v1/auth/refresh")
+    .send({ refreshToken: third.body.refreshToken });
+  assert.equal(deleted.status, 401);
+
+  const garbage = await request(app).post("/api/v1/auth/refresh").send({});
+  assert.equal(garbage.status, 400);
+});
+
+test("employees can only manage staff ranked below them", async () => {
+  const place = await fixture();
+  const hire = (position, name) =>
+    Employee.create({
+      restaurantId: place.restaurant._id,
+      employee: `${name}-${randomUUID().slice(0, 8)}`,
+      email: `${name}-${randomUUID().slice(0, 8)}@example.com`,
+      password: passwordHash,
+      position,
+      role: position,
+    });
+  const owner = await hire("owner", "own");
+  const otherAdmin = await hire("admin", "adm");
+  const waiter = await hire("waiter", "wai");
+  const asAdmin = (method, url) =>
+    request(app)[method](url).set("Authorization", `Bearer ${place.token}`);
+  const asOwner = (method, url) =>
+    request(app)[method](url).set("Authorization", `Bearer ${generateToken(owner)}`);
+
+  const ownerPassword = await asAdmin("put", `/api/v1/employee/${owner._id}`).send({
+    password: "takenover123",
+  });
+  assert.equal(ownerPassword.status, 403);
+  assert.equal((await asAdmin("delete", `/api/v1/employee/${owner._id}`)).status, 403);
+  assert.equal(
+    (await asAdmin("put", `/api/v1/employee/${otherAdmin._id}`).send({ password: "x".repeat(10) }))
+      .status,
+    403
+  );
+  const promote = await asAdmin("put", `/api/v1/employee/${waiter._id}`).send({ position: "owner" });
+  assert.equal(promote.status, 403);
+  const selfPromote = await asAdmin("put", `/api/v1/employee/${place.employee._id}`).send({
+    position: "owner",
+  });
+  assert.equal(selfPromote.status, 403);
+  const hireOwner = await asAdmin("post", "/api/v1/employee").send({
+    employee: `newowner${randomUUID().slice(0, 6)}`,
+    email: `no-${randomUUID().slice(0, 8)}@example.com`,
+    password: "password123",
+    position: "owner",
+  });
+  assert.equal(hireOwner.status, 403);
+  assert.equal((await asAdmin("delete", `/api/v1/employee/${place.employee._id}`)).status, 403);
+
+  const renameSelf = await asAdmin("put", `/api/v1/employee/${place.employee._id}`).send({
+    email: `me-${randomUUID().slice(0, 8)}@example.com`,
+  });
+  assert.equal(renameSelf.status, 200);
+  const demoteWaiter = await asAdmin("put", `/api/v1/employee/${waiter._id}`).send({
+    position: "kitchen",
+  });
+  assert.equal(demoteWaiter.status, 200);
+  assert.equal(demoteWaiter.body.role, "kitchen");
+  assert.equal((await asOwner("delete", `/api/v1/employee/${otherAdmin._id}`)).status, 200);
+  assert.equal((await asOwner("delete", `/api/v1/employee/${owner._id}`)).status, 403);
+  const stored = await Employee.findOne({ _id: owner._id, restaurantId: place.restaurant._id }).select(
+    "+password"
+  );
+  assert.ok(stored);
+  assert.equal(stored.password, passwordHash);
+});
+
+test("an open table needs its join code; the first guest and a returning guest do not", async () => {
+  const place = await fixture();
+  const scan = (body = {}, authorization) => {
+    const req = request(app).post(`/api/v1/auth/table/${place.table.qrCode}`);
+    if (authorization) req.set("Authorization", authorization);
+    return req.send(body);
+  };
+  const first = await scan();
+  assert.equal(first.status, 200);
+  assert.equal(first.body.opened, true);
+  assert.match(first.body.joinCode, /^[A-HJ-NP-Z2-9]{4}$/);
+
+  const noCode = await scan();
+  assert.equal(noCode.status, 403);
+  assert.equal(noCode.body.code, "JOIN_CODE_REQUIRED");
+  const wrongCode = first.body.joinCode === "AAAA" ? "BBBB" : "AAAA";
+  const wrong = await scan({ joinCode: wrongCode });
+  assert.equal(wrong.status, 403);
+  assert.equal(wrong.body.code, "JOIN_CODE_INVALID");
+
+  const friend = await scan({ joinCode: first.body.joinCode.toLowerCase() });
+  assert.equal(friend.status, 200);
+  assert.equal(friend.body.opened, false);
+  assert.equal(String(friend.body.sessionId), String(first.body.sessionId));
+
+  const back = await scan({ guestToken: first.body.token });
+  assert.equal(back.status, 200);
+  assert.equal(String(back.body.sessionId), String(first.body.sessionId));
+
+  const board = await request(app)
+    .get("/api/v1/staff/board")
+    .set("Authorization", `Bearer ${place.token}`);
+  const row = board.body.sessions.find((session) => session._id === String(first.body.sessionId));
+  assert.equal(row.joinCode, first.body.joinCode);
+
+  // After the table is closed the old guest token opens a fresh session.
+  await closeSession(staffCtx(place), first.body.sessionId);
+  const nextMeal = await scan({ guestToken: first.body.token });
+  assert.equal(nextMeal.status, 200);
+  assert.equal(nextMeal.body.opened, true);
+  assert.notEqual(String(nextMeal.body.sessionId), String(first.body.sessionId));
+});
+
+test("the board lists free tables and status follows the open session", async () => {
+  const place = await fixture();
+  const free = await Table.create({ restaurantId: place.restaurant._id, tableNumber: 2, capacity: 2 });
+  // A stale "occupied" left behind with no open session.
+  const stale = await Table.create({
+    restaurantId: place.restaurant._id,
+    tableNumber: 3,
+    capacity: 2,
+    status: "occupied",
+  });
+  const opened = await request(app).post(`/api/v1/auth/table/${place.table.qrCode}`).send({});
+  assert.equal(opened.status, 200);
+
+  const asStaff = (path) => request(app).get(path).set("Authorization", `Bearer ${place.token}`);
+  const statusOf = (rows, id) => rows.find((row) => String(row._id) === String(id))?.status;
+
+  const board = await asStaff("/api/v1/staff/board");
+  assert.equal(board.body.tables.length, 3);
+  assert.equal(statusOf(board.body.tables, place.table._id), "occupied");
+  assert.equal(statusOf(board.body.tables, free._id), "vacant");
+  assert.equal(statusOf(board.body.tables, stale._id), "vacant");
+
+  await closeSession(staffCtx(place), opened.body.sessionId);
+  const tables = await asStaff("/api/v1/table");
+  assert.equal(statusOf(tables.body, place.table._id), "vacant");
+  assert.equal(statusOf(tables.body, stale._id), "vacant");
+});
+
+test("wrong join codes are rate limited per table", async () => {
+  const place = await fixture();
+  await request(app).post(`/api/v1/auth/table/${place.table.qrCode}`).send({});
+  let last;
+  for (let attempt = 0; attempt < 11; attempt += 1) {
+    last = await request(app)
+      .post(`/api/v1/auth/table/${place.table.qrCode}`)
+      .send({ joinCode: "ZZZZZZ" });
+  }
+  assert.equal(last.status, 429);
+  assert.equal(last.body.code, "RATE_LIMITED");
+  const other = await fixture();
+  const elsewhere = await request(app).post(`/api/v1/auth/table/${other.table.qrCode}`).send({});
+  assert.equal(elsewhere.status, 200);
+});
+
+test("ALLOW_LEGACY_WS_TOKEN=false rejects ?token= but keeps tickets working", async () => {
+  const place = await fixture();
+  process.env.ALLOW_LEGACY_WS_TOKEN = "false";
+  try {
+    const legacy = await connect(place.token);
+    assert.equal(await waitForClose(legacy, 4003), 4003);
+    const ticket = await request(app)
+      .post("/api/v1/ws-ticket")
+      .set("Authorization", `Bearer ${place.token}`);
+    const current = await openSocket(`ticket=${encodeURIComponent(ticket.body.ticket)}`);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(current.closeCode(), null);
+    current.ws.close();
+  } finally {
+    delete process.env.ALLOW_LEGACY_WS_TOKEN;
+  }
+});
+
 test("/auth/table/5 does not issue a token", async () => {
   const res = await request(app).post("/api/v1/auth/table/5").send({});
   assert.equal(res.status, 404);
@@ -1046,7 +1372,6 @@ test("an unknown protocol version is closed with 4000", async () => {
 const AUTHENTICATED_ROUTES = [
   "POST /api/v1/ws-ticket",
   "GET /api/v1/auth/user",
-  "GET /api/v1/users",
   "GET /api/v1/users/:id",
   "PUT /api/v1/users/:id",
   "DELETE /api/v1/users/:id",
@@ -1067,6 +1392,7 @@ const AUTHENTICATED_ROUTES = [
   "PUT /api/v1/orders/:id",
   "PUT /api/v1/orders/:id/status",
   "DELETE /api/v1/orders/:id",
+  "GET /api/v1/sessions/:id/bill",
   "POST /api/v1/sessions/:id/close",
   "GET /api/v1/table",
   "POST /api/v1/table",
@@ -1345,6 +1671,7 @@ test("cross-tenant lists, creates, stats, public menu, and sockets stay inside r
     ["put", `/api/v1/employee/${b.employee._id}`, "PUT /api/v1/employee/:id"],
     ["delete", `/api/v1/employee/${b.employee._id}`, "DELETE /api/v1/employee/:id"],
     ["get", `/api/v1/orders/${orderB.order._id}`, "GET /api/v1/orders/:id"],
+    ["get", `/api/v1/sessions/${orderB.order.sessionId}/bill`, "GET /api/v1/sessions/:id/bill"],
     ["post", `/api/v1/sessions/${orderB.order.sessionId}/close`, "POST /api/v1/sessions/:id/close"],
   ];
   for (const [method, url, pattern] of missing) {
@@ -1386,34 +1713,24 @@ test("cross-tenant lists, creates, stats, public menu, and sockets stay inside r
   assert.equal(ticket.status, 200);
   assert.equal(jwt.verify(ticket.body.ticket, process.env.JWT_SECRET).restaurantId, String(a.restaurant._id));
 
-  const users = await asA("get", "/api/v1/users");
-  cover("GET", "/api/v1/users");
-  assert.equal(users.status, 200);
-  assert.equal(JSON.stringify(users.body).includes(String(orderB.order._id)), false);
-  assert.equal(users.body.users.some((user) => user.password), false);
-
+  // Customer accounts are global: a restaurant admin must not read, edit or
+  // delete them (anyone can register a restaurant and become its owner).
   const readUser = await asA("get", `/api/v1/users/${userA._id}`);
   cover("GET", "/api/v1/users/:id");
-  assert.equal(readUser.status, 200);
-  assert.equal(readUser.body.password, undefined);
-  assert.equal(readUser.body.restaurantId, undefined);
+  assert.equal(readUser.status, 403);
 
   const renamed = await asA("put", `/api/v1/users/${userA._id}`).send({
     username: `renamed${tag}`,
-    restaurantId: String(b.restaurant._id),
+    password: "takenover123",
   });
   cover("PUT", "/api/v1/users/:id");
-  assert.equal(renamed.status, 200);
-  assert.equal((await User.findById(userA._id)).restaurantId, undefined);
+  assert.equal(renamed.status, 403);
+  assert.notEqual((await User.findById(userA._id)).username, `renamed${tag}`);
 
-  const disposable = await User.create({
-    username: `gone${tag}`,
-    email: `gone-${tag}@example.com`,
-    password: passwordHash,
-  });
-  const removed = await asA("delete", `/api/v1/users/${disposable._id}`);
+  const removed = await asA("delete", `/api/v1/users/${userA._id}`);
   cover("DELETE", "/api/v1/users/:id");
-  assert.equal(removed.status, 200);
+  assert.equal(removed.status, 403);
+  assert.ok(await User.findById(userA._id));
   assert.ok(await Employee.findOne({ _id: b.employee._id, restaurantId: b.restaurant._id }));
 
   const board = await asA("get", "/api/v1/staff/board");

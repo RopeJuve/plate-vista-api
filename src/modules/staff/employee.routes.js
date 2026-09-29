@@ -18,7 +18,7 @@ employeeRouter.get("/", asyncRoute(async (req, res) => {
 }));
 
 employeeRouter.post("/", asyncRoute(async (req, res) => {
-  res.status(201).json(await createEmployee(req.tenant.restaurantId, req.body));
+  res.status(201).json(await createEmployee(req.tenant.restaurantId, req.user.id, req.body));
 }));
 
 employeeRouter.get("/:id", checkId, asyncRoute(async (req, res) => {
@@ -26,11 +26,13 @@ employeeRouter.get("/:id", checkId, asyncRoute(async (req, res) => {
 }));
 
 employeeRouter.put("/:id", checkId, asyncRoute(async (req, res) => {
-  res.status(200).json(await updateEmployee(req.tenant.restaurantId, req.params.id, req.body));
+  res.status(200).json(
+    await updateEmployee(req.tenant.restaurantId, req.user.id, req.params.id, req.body)
+  );
 }));
 
 employeeRouter.delete("/:id", checkId, asyncRoute(async (req, res) => {
-  await deleteEmployee(req.tenant.restaurantId, req.params.id);
+  await deleteEmployee(req.tenant.restaurantId, req.user.id, req.params.id);
   res.status(200).json({ message: "Employee deleted successfully" });
 }));
 

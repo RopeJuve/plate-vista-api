@@ -13,7 +13,8 @@ import {
   statusOrderSchema,
   updateOrderSchema,
 } from "./order.schemas.js";
-import { assertOpenSession, openOrJoinSession } from "./session.service.js";
+import TableSession from "./session.model.js";
+import { findSession, openOrJoinSession } from "./session.service.js";
 import { serializeOrder, serializeSession } from "./serialize.js";
 
 export { serializeOrder };
@@ -56,16 +57,21 @@ const logFailure = (ctx, sessionId, error) => {
   captureException(error);
 };
 
+const findOpenSession = async (restaurantId, sessionId, mongoSession) => {
+  const session = await findSession(restaurantId, sessionId, mongoSession);
+  if (session.status !== "open") {
+    throw new AppError("SESSION_CLOSED", "Session is closed");
+  }
+  return session;
+};
+
 const resolveSession = async (ctx, payload, mongoSession) => {
   if (ctx.actor?.type === "guest") {
     const session = await assertBoundGuestSession(ctx, mongoSession);
     return { session, opened: false, tableNumber: null };
   }
   if (payload.sessionId) {
-    const session = await TableSessionFind(ctx.restaurantId, payload.sessionId, mongoSession);
-    if (session.status !== "open") {
-      throw new AppError("SESSION_CLOSED", "Session is closed");
-    }
+    const session = await findOpenSession(ctx.restaurantId, payload.sessionId, mongoSession);
     return { session, opened: false, tableNumber: null };
   }
   if (payload.tableId) {
@@ -76,31 +82,26 @@ const resolveSession = async (ctx, payload, mongoSession) => {
   });
 };
 
-const TableSessionFind = async (restaurantId, sessionId, mongoSession) => {
-  const { default: TableSession } = await import("./session.model.js");
-  const query = TableSession.findOne({ _id: sessionId, restaurantId });
-  if (mongoSession) query.session(mongoSession);
-  const session = await query;
-  if (!session) throw new AppError("NOT_FOUND", "Not found", 404);
-  return session;
-};
-
 const assertBoundGuestSession = async (ctx, mongoSession) => {
-  const { default: TableSession } = await import("./session.model.js");
-  const query = TableSession.findOne({
-    _id: ctx.actor.sessionId,
-    restaurantId: ctx.restaurantId,
-  });
-  if (mongoSession) query.session(mongoSession);
-  const session = await query;
-  if (!session) throw new AppError("NOT_FOUND", "Not found", 404);
-  if (session.status !== "open") {
-    throw new AppError("SESSION_CLOSED", "Session is closed");
-  }
+  const session = await findOpenSession(ctx.restaurantId, ctx.actor.sessionId, mongoSession);
   if (ctx.actor.tableId && String(session.tableId) !== String(ctx.actor.tableId)) {
     throw new AppError("FORBIDDEN", "Forbidden");
   }
   return session;
+};
+
+// Reading the session is not enough: a close that commits while this
+// transaction runs touches a different document, so both would commit and the
+// order would land in a closed session. Writing the session document makes the
+// two transactions conflict; withTransaction retries and re-reads the status.
+const touchOpenSession = async (restaurantId, sessionId, mongoSession) => {
+  const result = await TableSession.updateOne(
+    { _id: sessionId, restaurantId, status: "open" },
+    { $set: { lastOrderAt: new Date() } }
+  ).session(mongoSession);
+  if (result.matchedCount === 0) {
+    throw new AppError("SESSION_CLOSED", "Session is closed");
+  }
 };
 
 const quantityMap = (items, key) => {
@@ -163,6 +164,7 @@ export const createOrder = async (ctx, input) => {
             mongoSession
           );
           if (stock.afterSave) await stock.afterSave();
+          await touchOpenSession(ctx.restaurantId, session._id, mongoSession);
           return order;
         });
         break;
@@ -180,7 +182,10 @@ export const createOrder = async (ctx, input) => {
     const order = serializeOrder(saved);
     if (openedMeta) {
       publishStaff(ctx.restaurantId, "session.opened", {
-        session: serializeSession(openedMeta.session, openedMeta.tableNumber),
+        session: {
+          ...serializeSession(openedMeta.session, openedMeta.tableNumber),
+          joinCode: openedMeta.session.code,
+        },
       });
     }
     publishOrder(ctx.restaurantId, order.sessionId, "order.created", { order });
@@ -190,8 +195,6 @@ export const createOrder = async (ctx, input) => {
     throw error;
   }
 };
-
-export const addRound = (ctx, input) => createOrder(ctx, input);
 
 export const updateOrder = async (ctx, input) => {
   let sessionId = ctx.actor?.sessionId || null;
@@ -238,6 +241,7 @@ export const updateOrder = async (ctx, input) => {
         });
       }
       await stock.adjust(deltas, ctx.restaurantId, mongoSession);
+      await touchOpenSession(ctx.restaurantId, current.sessionId, mongoSession);
       return updated;
     });
     const dto = serializeOrder(order);
@@ -374,8 +378,9 @@ export const cancelOrder = async (ctx, input) => {
   }
 };
 
+// Works for open and closed sessions, so a closed table's bill stays readable.
 export const getSessionBill = async (ctx, sessionId) => {
-  await assertOpenOrAny(ctx.restaurantId, sessionId);
+  const session = await findSession(ctx.restaurantId, sessionId);
   const orders = await Order.find({
     restaurantId: ctx.restaurantId,
     sessionId,
@@ -384,16 +389,10 @@ export const getSessionBill = async (ctx, sessionId) => {
   const totalCents = orders.reduce((sum, order) => sum + order.totalCents, 0);
   return {
     sessionId: String(sessionId),
+    session: serializeSession(session),
     orders: orders.map((order) => serializeOrder(order)),
     totalCents,
   };
-};
-
-const assertOpenOrAny = async (restaurantId, sessionId) => {
-  const { default: TableSession } = await import("./session.model.js");
-  const session = await TableSession.findOne({ _id: sessionId, restaurantId });
-  if (!session) throw new AppError("NOT_FOUND", "Not found", 404);
-  return session;
 };
 
 export const getOrder = async (restaurantId, orderId) => {
@@ -429,5 +428,3 @@ export const executeOrderCommand = async (ctx, command) => {
       throw new AppError("VALIDATION", "Unknown message type");
   }
 };
-
-export { assertOpenSession };

@@ -1,20 +1,20 @@
+import { timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import Restaurant from "../restaurants/restaurant.model.js";
 import Employee from "./employee.model.js";
 import User from "./user.model.js";
 import {
   hashPassword,
-  parsePagination,
   sanitizedUser,
   sanitizedUsers,
-  generateToken,
   generateTableToken,
   verifyToken,
 } from "../../shared/auth.js";
 import { AppError, isDuplicateKey } from "../../shared/errors.js";
+import { parseOrThrow } from "../../shared/validate.js";
 import { anonymizeUser } from "../ordering/order.service.js";
 import { findByQrCode } from "../tables/table.service.js";
-import { openOrJoinSessionSafe } from "../ordering/session.service.js";
+import { openOrJoinSessionWithRetry } from "../ordering/session.service.js";
 
 const registerSchema = z.object({
   restaurantName: z.string().trim().min(2),
@@ -68,7 +68,7 @@ export const registerRestaurant = async (input) => {
       position: "owner",
       role: "owner",
     });
-    return { restaurant, employee, token: generateToken(employee) };
+    return { restaurant, employee };
   } catch (error) {
     if (isDuplicateKey(error)) {
       throw new AppError("VALIDATION", "Account already exists", 409);
@@ -80,18 +80,54 @@ export const registerRestaurant = async (input) => {
   }
 };
 
-export const issueTableToken = async (qrCode, authHeader) => {
+const tableJoinSchema = z.object({
+  joinCode: z.string().trim().max(20).optional(),
+  guestToken: z.string().max(2000).optional(),
+});
+
+const decodeOrNull = (token) => {
+  if (!token) return null;
+  try {
+    return verifyToken(token);
+  } catch {
+    return null;
+  }
+};
+
+const sameCode = (given, expected) => {
+  const left = Buffer.from(given.toUpperCase());
+  const right = Buffer.from(String(expected).toUpperCase());
+  return left.length === right.length && timingSafeEqual(left, right);
+};
+
+// The first guest to scan a vacant table opens the session and gets its join
+// code. Anyone scanning an open table must enter that code (or present their
+// own earlier token for this session), so a photo of the QR code alone is not
+// enough to order to someone else's table.
+export const issueTableToken = async (qrCode, authHeader, input = {}) => {
+  const body = parseOrThrow(tableJoinSchema, input || {});
   const table = await findByQrCode(qrCode);
-  const session = await openOrJoinSessionSafe(table.restaurantId, table._id);
-  let user;
-  if (authHeader?.startsWith("Bearer ")) {
-    try {
-      const decoded = verifyToken(authHeader.split(" ")[1]);
-      if (decoded.role === "user") user = { _id: decoded.id };
-    } catch (error) {
-      user = undefined;
+  const { session, opened } = await openOrJoinSessionWithRetry(table.restaurantId, table._id);
+
+  const previous = decodeOrNull(body.guestToken);
+  const rejoining =
+    previous?.role === "guest" &&
+    previous.sessionId === String(session._id) &&
+    previous.restaurantId === String(table.restaurantId);
+  if (!opened && !rejoining) {
+    if (!body.joinCode) {
+      throw new AppError("JOIN_CODE_REQUIRED", "This table is already open. Enter its join code.");
+    }
+    if (!sameCode(body.joinCode, session.code)) {
+      throw new AppError("JOIN_CODE_INVALID", "Wrong join code");
     }
   }
+
+  const bearer = decodeOrNull(authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : "");
+  let user;
+  if (bearer?.role === "user") user = { _id: bearer.id };
+  else if (rejoining && previous.userId) user = { _id: previous.userId };
+
   const token = generateTableToken({
     restaurantId: table.restaurantId,
     tableId: table._id,
@@ -101,6 +137,8 @@ export const issueTableToken = async (qrCode, authHeader) => {
   return {
     token,
     sessionId: session._id,
+    joinCode: session.code,
+    opened,
     table: { id: table._id, tableNumber: table.tableNumber },
   };
 };
@@ -115,15 +153,6 @@ export const createUser = async (input) => {
     password: await hashPassword(data.password),
   });
   return sanitizedUser(user);
-};
-
-export const listUsers = async (query) => {
-  const { page, limit, skip } = parsePagination(query);
-  const [users, total] = await Promise.all([
-    User.find().skip(skip).limit(limit).lean(),
-    User.countDocuments(),
-  ]);
-  return { users: sanitizedUsers(users), page, limit, total };
 };
 
 export const getUser = async (id) => {
@@ -157,8 +186,41 @@ export const getEmployee = async (restaurantId, id) => {
   return sanitizedUser(employee);
 };
 
-export const createEmployee = async (restaurantId, input) => {
+// Access checks (requireRole) read the position, so rank does too; older
+// employee documents may not have a role field at all.
+const RANK = { owner: 3, admin: 2 };
+const rankOf = (role) => RANK[role] || 1;
+const rankOfEmployee = (employee) => rankOf(roleFromPosition(employee.position));
+
+// The token's position can be up to an hour stale, so rules are checked
+// against the actor as stored now.
+const loadActor = async (restaurantId, actorId) => {
+  const actor = await Employee.findOne({ _id: actorId, restaurantId });
+  if (!actor) throw new AppError("FORBIDDEN", "Forbidden");
+  return actor;
+};
+
+const forbid = (message) => new AppError("FORBIDDEN", message);
+
+const assertCanGrant = (actor, role) => {
+  if (rankOf(role) > rankOfEmployee(actor)) {
+    throw forbid("You cannot give a role higher than your own");
+  }
+};
+
+// Only employees ranked below you can be managed, so an admin cannot take over
+// the owner or another admin. Your own profile is editable, not your role.
+const assertCanManage = (actor, target) => {
+  if (String(actor._id) === String(target._id)) return;
+  if (rankOfEmployee(target) >= rankOfEmployee(actor)) {
+    throw forbid("You can only manage employees ranked below you");
+  }
+};
+
+export const createEmployee = async (restaurantId, actorId, input) => {
   const data = employeeSchema.parse(input);
+  const actor = await loadActor(restaurantId, actorId);
+  assertCanGrant(actor, roleFromPosition(data.position));
   try {
     const employee = await Employee.create({
       restaurantId,
@@ -175,12 +237,27 @@ export const createEmployee = async (restaurantId, input) => {
   }
 };
 
-export const updateEmployee = async (restaurantId, id, input) => {
+export const updateEmployee = async (restaurantId, actorId, id, input) => {
   const data = employeeUpdateSchema.parse(input);
+  const actor = await loadActor(restaurantId, actorId);
+  const target = await Employee.findOne({ _id: id, restaurantId });
+  if (!target) throw new AppError("NOT_FOUND", "Not found", 404);
+  assertCanManage(actor, target);
+  if (data.position) {
+    data.role = roleFromPosition(data.position);
+    if (
+      String(actor._id) === String(target._id) &&
+      data.role !== roleFromPosition(target.position)
+    ) {
+      throw forbid("You cannot change your own role");
+    }
+    assertCanGrant(actor, data.role);
+  }
   if (data.password) data.password = await hashPassword(data.password);
-  if (data.position) data.role = roleFromPosition(data.position);
+  // The position in the filter makes a concurrent promotion fail instead of
+  // being overwritten by a check that ran against the old position.
   const employee = await Employee.findOneAndUpdate(
-    { _id: id, restaurantId },
+    { _id: id, restaurantId, position: target.position },
     data,
     { new: true, runValidators: true }
   );
@@ -188,7 +265,18 @@ export const updateEmployee = async (restaurantId, id, input) => {
   return sanitizedUser(employee);
 };
 
-export const deleteEmployee = async (restaurantId, id) => {
-  const employee = await Employee.findOneAndDelete({ _id: id, restaurantId });
+export const deleteEmployee = async (restaurantId, actorId, id) => {
+  const actor = await loadActor(restaurantId, actorId);
+  const target = await Employee.findOne({ _id: id, restaurantId });
+  if (!target) throw new AppError("NOT_FOUND", "Not found", 404);
+  if (String(actor._id) === String(target._id)) {
+    throw forbid("You cannot delete your own account");
+  }
+  assertCanManage(actor, target);
+  const employee = await Employee.findOneAndDelete({
+    _id: id,
+    restaurantId,
+    position: target.position,
+  });
   if (!employee) throw new AppError("NOT_FOUND", "Not found", 404);
 };

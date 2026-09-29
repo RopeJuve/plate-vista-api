@@ -49,7 +49,9 @@ export const handleMessage = async (bytes, connection, auth) => {
     const raw = JSON.parse(bytes.toString());
     requestId = typeof raw?.requestId === "string" ? raw.requestId : null;
 
-    if (auth.exp && auth.exp * 1000 <= Date.now()) {
+    // A ws ticket only authorises the handshake; its 60s expiry must not end
+    // the connection. Legacy ?token= connections still expire with the token.
+    if (auth.purpose !== "ws" && auth.exp && auth.exp * 1000 <= Date.now()) {
       connection.close(4001, "token expired");
       return;
     }

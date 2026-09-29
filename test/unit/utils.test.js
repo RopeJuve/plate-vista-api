@@ -9,9 +9,8 @@ import {
   verifyToken,
   sanitizedUser,
   sanitizedUsers,
-  pick,
   parsePagination,
-} from "../../utils/index.js";
+} from "../../src/shared/auth.js";
 
 const oid = () => new mongoose.Types.ObjectId();
 
@@ -70,17 +69,6 @@ test("sanitizedUser strips password/__v from a lean() plain object", () => {
 test("sanitizedUsers maps a list the same way", () => {
   const users = [{ _id: "1", password: "a" }, { _id: "2", password: "b" }];
   assert.deepEqual(sanitizedUsers(users), [{ _id: "1" }, { _id: "2" }]);
-});
-
-test("pick only keeps whitelisted keys (mass-assignment guard)", () => {
-  const body = { title: "Pizza", price: 10, numSold: 9999 };
-  const result = pick(body, ["title", "price"]);
-  assert.deepEqual(result, { title: "Pizza", price: 10 });
-  assert.equal(result.numSold, undefined);
-});
-
-test("pick ignores keys not present on the source", () => {
-  assert.deepEqual(pick({ title: "x" }, ["title", "missing"]), { title: "x" });
 });
 
 test("parsePagination defaults to page 1 / limit 20", () => {

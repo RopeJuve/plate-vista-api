@@ -12,19 +12,16 @@ import assert from "node:assert/strict";
 import express from "express";
 import request from "supertest";
 
-import {
-  authRouter,
-  userRouter,
-  menuItemRouter,
-  orderRouter,
-  employeeRouter,
-  tableRouter,
-  statisticsRouter,
-  sessionRouter,
-  staffRouter,
-  internalRouter,
-  publicMenuRouter,
-} from "../../routes/index.js";
+import authRouter from "../../src/modules/staff/auth.routes.js";
+import userRouter from "../../src/modules/staff/user.routes.js";
+import menuItemRouter, { publicMenuRouter } from "../../src/modules/menu/menu.routes.js";
+import orderRouter from "../../src/modules/ordering/order.routes.js";
+import employeeRouter from "../../src/modules/staff/employee.routes.js";
+import tableRouter from "../../src/modules/tables/table.routes.js";
+import statisticsRouter from "../../src/modules/stats/stats.routes.js";
+import sessionRouter from "../../src/modules/ordering/session.routes.js";
+import staffRouter from "../../src/modules/staff/staff.routes.js";
+import internalRouter from "../../src/modules/internal/internal.routes.js";
 
 const PLACEHOLDER_ID = "507f1f77bcf86cd799439011";
 
@@ -36,6 +33,8 @@ const PUBLIC_ROUTES = new Set([
   "auth POST /employee/login",
   "auth POST /table/:qrCode",
   "auth POST /register",
+  "auth POST /refresh",
+  "auth POST /logout",
   "users POST /",
   "r GET /:slug/menu-items",
   "r GET /:slug/menu-items/category",
