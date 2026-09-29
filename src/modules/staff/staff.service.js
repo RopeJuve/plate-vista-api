@@ -1,9 +1,10 @@
 import { timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import Restaurant from "../restaurants/restaurant.model.js";
-import Employee from "./employee.model.js";
+import Employee, { NAME_COLLATION } from "./employee.model.js";
 import User from "./user.model.js";
 import {
+  comparePassword,
   hashPassword,
   sanitizedUser,
   sanitizedUsers,
@@ -37,13 +38,58 @@ const userSchema = z.object({
 const userUpdateSchema = userSchema.partial();
 
 const employeeSchema = z.object({
-  employee: z.string().min(4, "Employee name must be at least 4 characters long"),
-  email: z.string().email("Invalid email"),
+  employee: z.string().trim().min(4, "Employee name must be at least 4 characters long"),
+  email: z.string().trim().email("Invalid email").optional(),
   password: z.string().min(8, "Password must be at least 8 characters long"),
   position: z.string().min(3, "Position must be at least 3 characters long"),
 });
 
 const employeeUpdateSchema = employeeSchema.partial();
+
+const staffLoginSchema = z.object({
+  restaurant: z.string({ error: "Restaurant is required" }).trim().toLowerCase().min(1, "Restaurant is required"),
+  employee: z.string({ error: "Name is required" }).trim().min(1, "Name is required"),
+  password: z.string({ error: "Password is required" }).min(1, "Password is required"),
+});
+
+const ownerLoginSchema = z.object({
+  email: z.string({ error: "Email is required" }).trim().toLowerCase().min(1, "Email is required"),
+  password: z.string({ error: "Password is required" }).min(1, "Password is required"),
+});
+
+const invalidCredentials = () => new AppError("UNAUTHORIZED", "Invalid credentials");
+
+// Compared against when no account matches, so a missing account takes as long
+// to reject as a wrong password.
+let dummyHash;
+
+const checkPassword = async (account, password) => {
+  dummyHash ??= hashPassword("no-account-has-this-password");
+  const matches = await comparePassword(password, account?.password || (await dummyHash));
+  if (!account || !matches) throw invalidCredentials();
+  return account;
+};
+
+// Staff (admins included) log in inside one restaurant: slug + name.
+export const authenticateStaff = async (input) => {
+  const data = parseOrThrow(staffLoginSchema, input || {});
+  const restaurant = await Restaurant.findOne({ slug: data.restaurant, status: "active" }).lean();
+  const employee = restaurant
+    ? await Employee.findOne({ restaurantId: restaurant._id, employee: data.employee })
+        .collation(NAME_COLLATION)
+        .select("+password")
+    : null;
+  return checkPassword(employee, data.password);
+};
+
+// Owners manage the restaurant from the dashboard and log in with email alone.
+export const authenticateOwner = async (input) => {
+  const data = parseOrThrow(ownerLoginSchema, input || {});
+  const owner = await Employee.findOne({ email: data.email, role: "owner" })
+    .setOptions({ skipTenant: true })
+    .select("+password");
+  return checkPassword(owner, data.password);
+};
 
 const roleFromPosition = (position) => {
   const value = String(position || "").toLowerCase();
@@ -217,22 +263,40 @@ const assertCanManage = (actor, target) => {
   }
 };
 
+const duplicateEmployee = (error) => {
+  const keys = Object.keys(error.keyPattern || error.cause?.keyPattern || {});
+  if (keys.includes("email")) {
+    return new AppError("VALIDATION", "An owner with this email already exists", 409, {
+      fields: { email: "An owner with this email already exists" },
+    });
+  }
+  return new AppError("VALIDATION", "An employee with this name already exists", 409, {
+    fields: { employee: "An employee with this name already exists" },
+  });
+};
+
 export const createEmployee = async (restaurantId, actorId, input) => {
   const data = employeeSchema.parse(input);
   const actor = await loadActor(restaurantId, actorId);
-  assertCanGrant(actor, roleFromPosition(data.position));
+  const role = roleFromPosition(data.position);
+  assertCanGrant(actor, role);
+  if (role === "owner" && !data.email) {
+    throw new AppError("VALIDATION", "An owner needs an email to log in", 400, {
+      fields: { email: "An owner needs an email to log in" },
+    });
+  }
   try {
     const employee = await Employee.create({
       restaurantId,
       employee: data.employee,
-      email: data.email.toLowerCase(),
+      email: data.email?.toLowerCase(),
       password: await hashPassword(data.password),
       position: data.position,
-      role: roleFromPosition(data.position),
+      role,
     });
     return sanitizedUser(employee);
   } catch (error) {
-    if (isDuplicateKey(error)) throw new AppError("VALIDATION", "Employee already exists", 409);
+    if (isDuplicateKey(error)) throw duplicateEmployee(error);
     throw error;
   }
 };
@@ -260,7 +324,9 @@ export const updateEmployee = async (restaurantId, actorId, id, input) => {
     { _id: id, restaurantId, position: target.position },
     data,
     { new: true, runValidators: true }
-  );
+  ).catch((error) => {
+    throw isDuplicateKey(error) ? duplicateEmployee(error) : error;
+  });
   if (!employee) throw new AppError("NOT_FOUND", "Not found", 404);
   return sanitizedUser(employee);
 };

@@ -11,7 +11,6 @@ import { generateWsTicket } from "./shared/auth.js";
 import { requireAuth } from "./modules/staff/auth.middleware.js";
 import { captureException, initSentry, logger } from "./shared/logger.js";
 import userPassport from "./modules/staff/userPassport.js";
-import employeePassport from "./modules/staff/employeePassport.js";
 import authRouter from "./modules/staff/auth.routes.js";
 import userRouter from "./modules/staff/user.routes.js";
 import employeeRouter from "./modules/staff/employee.routes.js";
@@ -68,7 +67,6 @@ app.use((req, res, next) => {
 
 app.use(passport.initialize());
 userPassport(passport);
-employeePassport(passport);
 
 app.get("/", (_req, res) => {
   res.send("Plate Vista API");

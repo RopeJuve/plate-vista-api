@@ -4,20 +4,37 @@ import { authLimiter, tableJoinLimiter } from "../../shared/rateLimiters.js";
 import { asyncRoute } from "../../shared/asyncRoute.js";
 import { AppError } from "../../shared/errors.js";
 import { requireAuth } from "./auth.middleware.js";
-import { issueTableToken, registerRestaurant } from "./staff.service.js";
+import Restaurant from "../restaurants/restaurant.model.js";
+import {
+  authenticateOwner,
+  authenticateStaff,
+  issueTableToken,
+  registerRestaurant,
+} from "./staff.service.js";
 import { issueTokens, revokeRefreshToken, rotateRefreshToken } from "./token.service.js";
 
 const authRouter = express.Router();
 
 // Responds with { accessToken, refreshToken, expiresIn, tokenType }. The access
 // token is also sent in the Authorization header for older clients.
+// Employee logins also return their restaurant, so the app can build its links.
 const login = asyncRoute(async (req, res) => {
   const tokens = await issueTokens(req.user);
   res.setHeader("Authorization", `Bearer ${tokens.accessToken}`);
   const who = req.user.username
     ? { username: req.user.username }
     : { position: req.user.position };
-  res.status(200).json({ message: "Logged in successfully", ...who, ...tokens });
+  const restaurant = req.user.restaurantId
+    ? await Restaurant.findById(req.user.restaurantId).select("name slug").lean()
+    : null;
+  res.status(200).json({
+    message: "Logged in successfully",
+    ...who,
+    ...(restaurant && {
+      restaurant: { id: restaurant._id, name: restaurant.name, slug: restaurant.slug },
+    }),
+    ...tokens,
+  });
 });
 
 authRouter.post(
@@ -27,10 +44,26 @@ authRouter.post(
   login
 );
 
+// Body: { restaurant: slug, employee, password }. Staff names are unique only
+// inside a restaurant, so the slug says which restaurant to look in.
 authRouter.post(
   "/employee/login",
   authLimiter,
-  passport.authenticate("employee-local", { session: false, failureMessage: true }),
+  asyncRoute(async (req, _res, next) => {
+    req.user = await authenticateStaff(req.body);
+    next();
+  }),
+  login
+);
+
+// Body: { email, password }. Dashboard login for restaurant owners only.
+authRouter.post(
+  "/owner/login",
+  authLimiter,
+  asyncRoute(async (req, _res, next) => {
+    req.user = await authenticateOwner(req.body);
+    next();
+  }),
   login
 );
 

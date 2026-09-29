@@ -31,6 +31,7 @@ const PLACEHOLDER_ID = "507f1f77bcf86cd799439011";
 const PUBLIC_ROUTES = new Set([
   "auth POST /login",
   "auth POST /employee/login",
+  "auth POST /owner/login",
   "auth POST /table/:qrCode",
   "auth POST /register",
   "auth POST /refresh",

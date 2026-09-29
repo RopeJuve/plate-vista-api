@@ -8,6 +8,7 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "migrate": "node scripts/migrate-tenants.js",
+    "migrate:staff-logins": "node scripts/migrate-staff-logins.js",
     "vercel-build": "echo hello",
     "test": "node --test --test-concurrency=1 --experimental-test-isolation=process \"test/unit/*.test.js\" \"test/ordering/*.test.js\"",
     "test:integration": "node --test --test-concurrency=1 --experimental-test-isolation=process \"test/integration/*.test.js\""

@@ -122,3 +122,38 @@ test("tenant migration backfills restaurantId and can run twice", async () => {
   });
   assert.equal(await MenuItem.countDocuments({ title: "Pizza" }).setOptions({ skipTenant: true }), 2);
 });
+
+test("staff login migration refuses conflicting names, then swaps to per-restaurant indexes", async () => {
+  const { migrateStaffLogins } = await import("../../src/db/migrateStaffLogins.js");
+  const employees = mongoose.connection.db.collection("employees");
+  await employees.deleteMany({});
+  await employees.createIndex({ employee: 1 }, { unique: true, name: "employee_1" });
+  await employees.createIndex({ email: 1 }, { unique: true, name: "email_1" });
+  const barA = new mongoose.Types.ObjectId();
+  const barB = new mongoose.Types.ObjectId();
+  await employees.insertMany([
+    { restaurantId: barA, employee: "PeterTest", email: "a@x.com", position: "bar", role: "staff" },
+    { restaurantId: barA, employee: "PETERTEST ", email: "b@x.com", position: "bar", role: "staff" },
+    { restaurantId: barA, employee: "Boss", email: "Owner@X.com", position: "owner", role: "owner" },
+    { restaurantId: barB, employee: "Rope", email: "c@x.com", position: "bar", role: "staff" },
+  ]);
+
+  const refused = await migrateStaffLogins();
+  assert.equal(refused.applied, false);
+  assert.deepEqual(refused.conflicts, [
+    { restaurantId: String(barA), name: "petertest", employees: ["PeterTest", "PETERTEST "] },
+  ]);
+  const untouched = (await employees.indexes()).map((index) => index.name);
+  assert.ok(untouched.includes("employee_1"));
+
+  await employees.updateOne({ employee: "PETERTEST " }, { $set: { employee: "Peter Bar" } });
+  const applied = await migrateStaffLogins();
+  assert.equal(applied.applied, true);
+  const names = (await employees.indexes()).map((index) => index.name);
+  assert.ok(!names.includes("employee_1"));
+  assert.ok(!names.includes("email_1"));
+  assert.ok(names.includes("restaurantId_1_employee_1"));
+  assert.equal((await employees.findOne({ employee: "Boss" })).email, "owner@x.com");
+  // Another restaurant may now hire a "Rope" of its own.
+  await employees.insertOne({ restaurantId: barA, employee: "Rope", position: "bar", role: "staff" });
+});

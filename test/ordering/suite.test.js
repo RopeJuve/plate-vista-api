@@ -521,11 +521,116 @@ test("a closed session's bill stays readable by staff and its own guest and show
   assert.equal(board.body.sessions.some((row) => row._id === sessionId), false);
 });
 
+test("staff log in with their restaurant's slug, so two restaurants can each have a Rope", async () => {
+  await Employee.init();
+  const a = await fixture();
+  const b = await fixture();
+  const hireRope = (place) =>
+    Employee.create({
+      restaurantId: place.restaurant._id,
+      employee: "Rope",
+      password: passwordHash,
+      position: "bar",
+      role: "staff",
+    });
+  await hireRope(a);
+  await hireRope(b);
+  const login = (body) => request(app).post("/api/v1/auth/employee/login").send(body);
+  const tenantOf = (response) => jwt.decode(response.body.accessToken).restaurantId;
+
+  const intoA = await login({ restaurant: a.restaurant.slug, employee: "rope", password: "supersecret1" });
+  assert.equal(intoA.status, 200);
+  assert.equal(intoA.body.position, "bar");
+  assert.equal(intoA.body.restaurant.slug, a.restaurant.slug);
+  assert.equal(tenantOf(intoA), String(a.restaurant._id));
+  const intoB = await login({ restaurant: b.restaurant.slug, employee: "Rope", password: "supersecret1" });
+  assert.equal(intoB.status, 200);
+  assert.equal(tenantOf(intoB), String(b.restaurant._id));
+
+  const noSlug = await login({ employee: "Rope", password: "supersecret1" });
+  assert.equal(noSlug.status, 400);
+
+  // One message for every failure, so the response does not reveal which
+  // restaurants or names exist.
+  const failures = await Promise.all([
+    login({ restaurant: "no-such-place", employee: "Rope", password: "supersecret1" }),
+    login({ restaurant: a.restaurant.slug, employee: "Rope", password: "wrong-password" }),
+    login({ restaurant: a.restaurant.slug, employee: "Nobody", password: "supersecret1" }),
+  ]);
+  failures.forEach((failure) => {
+    assert.equal(failure.status, 401);
+    assert.equal(failure.body.message, "Invalid credentials");
+  });
+});
+
+test("a restaurant cannot hire two employees with the same name, ignoring case; email is optional", async () => {
+  await Employee.init();
+  const place = await fixture();
+  const hire = (body) =>
+    request(app)
+      .post("/api/v1/employee")
+      .set("Authorization", `Bearer ${place.token}`)
+      .send({ password: "supersecret1", position: "bar", ...body });
+
+  const first = await hire({ employee: "Marta" });
+  assert.equal(first.status, 201);
+  assert.equal(first.body.email, undefined);
+  const again = await hire({ employee: "MARTA" });
+  assert.equal(again.status, 409);
+  assert.equal(again.body.message, "An employee with this name already exists");
+
+  // Email is contact info only, so colleagues may share one.
+  const shared = await Promise.all([
+    hire({ employee: "Jonas", email: "team@example.com" }),
+    hire({ employee: "Lena", email: "team@example.com" }),
+  ]);
+  shared.forEach((response) => assert.equal(response.status, 201));
+
+  const other = await fixture();
+  const elsewhere = await request(app)
+    .post("/api/v1/employee")
+    .set("Authorization", `Bearer ${other.token}`)
+    .send({ employee: "Marta", password: "supersecret1", position: "bar" });
+  assert.equal(elsewhere.status, 201);
+});
+
+test("owners log in with their email; other staff cannot use the owner login", async () => {
+  await Employee.init();
+  const suffix = randomUUID().slice(0, 8);
+  const register = (slug) =>
+    request(app)
+      .post("/api/v1/auth/register")
+      .send({
+        restaurantName: `Owner ${suffix}`,
+        slug,
+        employee: "Owner Name",
+        email: `owner-${suffix}@example.com`,
+        password: "supersecret1",
+      });
+  const registered = await register(`owner-${suffix}`);
+  assert.equal(registered.status, 201);
+
+  const login = (body) => request(app).post("/api/v1/auth/owner/login").send(body);
+  const owner = await login({ email: `OWNER-${suffix}@example.com`, password: "supersecret1" });
+  assert.equal(owner.status, 200);
+  assert.equal(owner.body.position, "owner");
+  assert.equal(owner.body.restaurant.slug, `owner-${suffix}`);
+  assert.equal(jwt.decode(owner.body.accessToken).restaurantId, registered.body.restaurant.id);
+
+  const place = await fixture();
+  const admin = await login({ email: place.employee.email, password: "supersecret1" });
+  assert.equal(admin.status, 401);
+  assert.equal(admin.body.message, "Invalid credentials");
+
+  const sameEmail = await register(`owner-${suffix}-2`);
+  assert.equal(sameEmail.status, 409);
+});
+
 test("refresh tokens rotate, detect reuse, and stop working after logout", async () => {
   const place = await fixture();
   const login = await request(app)
     .post("/api/v1/auth/employee/login")
-    .send({ employee: place.employee.employee, password: "supersecret1" });
+    .send({ restaurant: place.restaurant.slug, employee: place.employee.employee, password: "supersecret1" });
   assert.equal(login.status, 200);
   assert.equal(typeof login.body.accessToken, "string");
   assert.equal(typeof login.body.refreshToken, "string");
@@ -554,7 +659,7 @@ test("refresh tokens rotate, detect reuse, and stop working after logout", async
 
   const second = await request(app)
     .post("/api/v1/auth/employee/login")
-    .send({ employee: place.employee.employee, password: "supersecret1" });
+    .send({ restaurant: place.restaurant.slug, employee: place.employee.employee, password: "supersecret1" });
   const logout = await request(app)
     .post("/api/v1/auth/logout")
     .send({ refreshToken: second.body.refreshToken });
@@ -566,7 +671,7 @@ test("refresh tokens rotate, detect reuse, and stop working after logout", async
 
   const third = await request(app)
     .post("/api/v1/auth/employee/login")
-    .send({ employee: place.employee.employee, password: "supersecret1" });
+    .send({ restaurant: place.restaurant.slug, employee: place.employee.employee, password: "supersecret1" });
   await Employee.deleteOne({ _id: place.employee._id, restaurantId: place.restaurant._id });
   const deleted = await request(app)
     .post("/api/v1/auth/refresh")
