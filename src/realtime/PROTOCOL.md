@@ -1,10 +1,18 @@
-# WebSocket protocol v2.1
+# WebSocket protocol v2.2
 
 Orders change only through this socket. REST reads the current board; it does not create or edit orders.
 
-This release is **2.1**. Clients connect with `/ws?v=2`. A missing `v` defaults to `2`. An unknown version is closed with code `4000` and reason `unsupported protocol version`.
+This release is **2.2**. Clients connect with `/ws?v=2`. A missing `v` defaults to `2`. An unknown version is closed with code `4000` and reason `unsupported protocol version`.
 
 ## Changelog
+
+### 2.2
+
+- An order has one **ticket** for each station it has items for, and each ticket has its own status. `Order.tickets` is new; `Order.status` is now worked out from the tickets.
+- `order.status` and `order.cancel` take an optional `station`. Without it they act on the whole order, so 2.1 clients keep working.
+- `order.statusChanged` also carries `tickets`, `totalCents`, and `station` when one ticket was named.
+- Staff can cancel one ticket. Its lines stay on the order but come off `totalCents`.
+- An order can be edited, and cancelled by a guest, only while every ticket is `pending`.
 
 ### 2.1
 
@@ -67,6 +75,11 @@ Dates are ISO-8601 strings. Money is integer cents. No Mongoose internals (`__v`
   "clientOrderId": "string",
   "status": "pending|accepted|preparing|ready|served|cancelled",
   "rev": 1,
+  "tickets": [{
+    "station": "kitchen|bar",
+    "status": "pending|accepted|preparing|ready|served|cancelled",
+    "cancelReason": "string"
+  }],
   "items": [{
     "productId": "string",
     "title": "string",
@@ -81,6 +94,12 @@ Dates are ISO-8601 strings. Money is integer cents. No Mongoose internals (`__v`
   "updatedAt": "ISO-8601"
 }
 ```
+
+`tickets` has one entry for each station the order has items for, kitchen first. A line belongs to the ticket of its `station`. An order of drinks only has one ticket.
+
+`status` is the order as a whole: the slowest ticket that is not cancelled (`bar: served` + `kitchen: preparing` is `preparing`). It is `cancelled` only when every ticket is.
+
+`totalCents` leaves out the lines of a cancelled ticket. A fully cancelled order keeps the total of what was cancelled.
 
 `rev` is an integer that starts at 1 and increments by exactly 1 on every change, in the same write. It is present on every order payload and on `order.statusChanged`. clients must ignore events with rev <= the stored rev.
 
@@ -131,18 +150,26 @@ An order that races a session close is rejected with `SESSION_CLOSED`; it never 
 ```json
 { "type": "order.create", "requestId": "uuid", "payload": { "clientOrderId": "uuid", "items": [{ "productId": "...", "quantity": 2, "notes": "" }], "tableId": "...", "sessionId": "..." } }
 { "type": "order.update", "requestId": "uuid", "payload": { "orderId": "...", "items": [{ "productId": "...", "quantity": 1 }] } }
-{ "type": "order.status", "requestId": "uuid", "payload": { "orderId": "...", "status": "accepted" } }
-{ "type": "order.cancel", "requestId": "uuid", "payload": { "orderId": "...", "reason": "guest left" } }
+{ "type": "order.status", "requestId": "uuid", "payload": { "orderId": "...", "status": "accepted", "station": "bar" } }
+{ "type": "order.cancel", "requestId": "uuid", "payload": { "orderId": "...", "reason": "guest left", "station": "kitchen" } }
 ```
+
+`station` is optional on both:
+
+- `order.status` with a `station` moves that ticket. Without one it moves the ticket (or tickets) holding the order back, the ones at the order's own `status`; when all tickets are level that is every ticket.
+- `order.cancel` with a `station` cancels that ticket. Without one it cancels every ticket that is not already cancelled, and fails with `INVALID_TRANSITION` if any of them is past `accepted`.
+- A `station` the order has no ticket for is `NOT_FOUND`.
 
 ### Permissions
 
 | Message | Guest | Staff |
 |---|---|---|
 | `order.create` | own session only | yes (needs `tableId` or `sessionId`) |
-| `order.update` | own session, `pending` only | `pending` only |
-| `order.status` | `FORBIDDEN` | yes |
-| `order.cancel` | own session, `pending` only | `pending` / `accepted` |
+| `order.update` | own session, every ticket `pending` | every ticket `pending` |
+| `order.status` | `FORBIDDEN` | yes, any ticket |
+| `order.cancel` | own session, whole order, no ticket started | a ticket that is `pending` / `accepted` |
+
+A guest `order.cancel` with a `station` is `FORBIDDEN`. Staff of any position may move or cancel any ticket; the bar and kitchen screens decide what is shown, not what is allowed.
 
 A guest is bound to the session in their token. `tableId` or `sessionId` in a guest payload is ignored. A guest acting on another session's order receives `NOT_FOUND`. Any table number in a payload is ignored for routing.
 
@@ -178,20 +205,20 @@ An unknown `type` is `VALIDATION`. The 11th message within 10 seconds is `RATE_L
 { "type": "event", "event": "session.opened", "data": { "session": { "joinCode": "K7QM" } } }
 { "type": "event", "event": "order.created", "data": { "order": {} } }
 { "type": "event", "event": "order.updated", "data": { "order": {} } }
-{ "type": "event", "event": "order.statusChanged", "data": { "orderId": "...", "status": "accepted", "rev": 2 } }
+{ "type": "event", "event": "order.statusChanged", "data": { "orderId": "...", "status": "pending", "rev": 2, "tickets": [], "totalCents": 1800, "station": "bar" } }
 { "type": "event", "event": "session.closed", "data": { "sessionId": "...", "tableId": "..." } }
 { "type": "event", "event": "menu.updated", "data": { "_id": "...", "title": "...", "priceCents": 450, "inStock": true, "category": "food", "archived": false } }
 ```
 
 `session.paid` is reserved for a later Stripe flow and is not emitted yet.
 
-Cancel emits `order.statusChanged` with `status: "cancelled"` (plus `reason` and `rev`). `session.opened` goes to the staff room only, and only when that order opened the session. Other order events go to that session's room and the staff room.
+`order.statusChanged` carries the order's `status`, all its `tickets`, and its `totalCents` after the change; `station` is present when the message named one. Cancel emits it too, with `reason`; `status` is `"cancelled"` only when that was the order's last ticket. `session.opened` goes to the staff room only, and only when that order opened the session. Other order events go to that session's room and the staff room.
 
 `menu.updated` is sent on any menu change (create, price, name, stock, archive) and carries the full item. Clients should replace the item in their menu cache.
 
 Menu updates go to every room for the restaurant.
 
-Status moves `pending → accepted → preparing → ready → served`. `cancelled` is allowed from `pending` or `accepted` for staff, and from `pending` only for the guest who owns the session. Adding food during a meal creates a new order (round) in the same session. A pending order can still be edited; later statuses cannot.
+Each ticket moves `pending → accepted → preparing → ready → served` on its own, so the bar can serve the drinks while the kitchen is still cooking. Staff can cancel a ticket that is `pending` or `accepted`; the guest who owns the session can cancel the order while no ticket has started. Adding food during a meal creates a new order in the same session. An order can be edited while every ticket is `pending`; the edit rebuilds the tickets from the new items.
 
 Money on an order is integer cents (`unitPriceCents`, `lineTotalCents`, `totalCents`), copied from the menu at creation.
 

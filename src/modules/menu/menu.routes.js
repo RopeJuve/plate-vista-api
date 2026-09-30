@@ -3,6 +3,7 @@ import { asyncRoute } from "../../shared/asyncRoute.js";
 import { parseOrThrow } from "../../shared/validate.js";
 import { checkId, requireAuth, requireRole, requireTenant } from "../staff/auth.middleware.js";
 import { createMenuSchema, updateMenuSchema } from "./menu.schemas.js";
+import { signMenuImageUpload } from "../../shared/cloudinary.js";
 import {
   archiveMenuItem,
   createMenuItem,
@@ -34,6 +35,11 @@ menuRouter.post("/", ...write, asyncRoute(async (req, res) => {
   const body = parseOrThrow(createMenuSchema, req.body);
   res.status(201).json(await createMenuItem(req.tenant.restaurantId, body));
 }));
+
+// Responds with what the browser needs to upload one image to Cloudinary.
+menuRouter.post("/upload-signature", ...write, (req, res) => {
+  res.status(200).json(signMenuImageUpload(req.tenant.restaurantId));
+});
 
 menuRouter.get("/:id", ...read, checkId, asyncRoute(async (req, res) => {
   res.status(200).json(await getMenuItem(req.tenant.restaurantId, req.params.id));

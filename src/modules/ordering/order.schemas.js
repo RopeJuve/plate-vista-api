@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ORDER_STATUSES } from "./order.transitions.js";
+import { STATIONS } from "../categories/category.model.js";
 
 const objectId = z
   .string()
@@ -31,14 +32,20 @@ export const updateOrderSchema = z.object({
   items: z.array(orderItemSchema).min(1, "must contain at least 1 item").max(MAX_ITEMS, "must contain at most 50 items"),
 });
 
+// Without a station the message is about the whole order, as it was before
+// tickets existed.
+const station = z.enum(STATIONS, { error: "Station must be kitchen or bar" }).optional();
+
 export const statusOrderSchema = z.object({
   orderId: objectId,
   status: z.string().refine((value) => ORDER_STATUSES.includes(value), "Invalid order status"),
+  station,
 });
 
 export const cancelOrderSchema = z.object({
   orderId: objectId,
   reason: z.string().max(500).optional(),
+  station,
 });
 
 export const inboundMessageSchema = z.discriminatedUnion("type", [

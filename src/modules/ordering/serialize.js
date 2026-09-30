@@ -1,3 +1,5 @@
+import { ticketsOf } from "./tickets.js";
+
 const idOf = (value) => (value == null ? null : String(value));
 
 const iso = (value) => {
@@ -17,6 +19,7 @@ export const serializeOrder = (order) => {
     clientOrderId: source.clientOrderId,
     status: source.status,
     rev: source.rev ?? 1,
+    tickets: ticketsOf(source),
     items: (source.items || []).map((item) => ({
       productId: idOf(item.productId),
       title: item.title,

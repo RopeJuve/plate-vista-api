@@ -3,82 +3,128 @@ import MenuItem from "./menuItem.model.js";
 import Restaurant from "../restaurants/restaurant.model.js";
 import { AppError, isDuplicateKey } from "../../shared/errors.js";
 import { publish } from "../../realtime/events.js";
+import { categoriesById, findCategory } from "../categories/category.service.js";
 
 const toCents = (price) => currency(price).intValue;
 
-export const serializeMenuItem = (item) => {
+// Name and station come from the item's category; the station is never the
+// item's own (docs/adr/0001-station-belongs-to-category.md).
+const categoryFields = (source, categories) => {
+  const category = categories.get(String(source.categoryId));
+  return {
+    categoryId: source.categoryId ? String(source.categoryId) : null,
+    category: category?.name ?? null,
+    station: category?.station ?? "kitchen",
+  };
+};
+
+export const serializeMenuItem = (item, categories) => {
   const source = item?.toObject ? item.toObject() : item;
   return {
     _id: String(source._id),
     title: source.title,
     priceCents: source.priceCents,
     inStock: Boolean(source.inStock),
-    category: source.category,
+    ...categoryFields(source, categories),
     archived: Boolean(source.archived),
   };
 };
 
 const visible = { archived: false };
 
-const toPublicMenu = (item) => {
-  const source = item?.toObject ? item.toObject() : item;
-  return {
-    _id: String(source._id),
-    title: source.title,
-    description: source.description,
-    price: currency(source.priceCents ?? 0, { fromCents: true }).value,
-    priceCents: source.priceCents,
-    image: source.image,
-    category: source.category,
-    inStock: Boolean(source.inStock),
-    station: source.station || "kitchen",
-    popular: Boolean(source.popular),
-  };
-};
+const toPublicMenu = (item) => ({
+  _id: String(item._id),
+  title: item.title,
+  description: item.description || "",
+  price: item.price,
+  priceCents: item.priceCents,
+  image: item.image || null,
+  category: item.category,
+  inStock: Boolean(item.inStock),
+  station: item.station,
+  popular: Boolean(item.popular),
+});
 
-const toDTO = (item) => {
+const toDTO = (item, categories) => {
   const source = item.toObject ? item.toObject() : item;
   return {
     ...source,
+    description: source.description || "",
+    image: source.image || null,
+    ...categoryFields(source, categories),
     priceCents: source.priceCents,
     price: currency(source.priceCents ?? 0, { fromCents: true }).value,
   };
 };
 
-export const listMenuItems = async (restaurantId, category) => {
-  const filter = { restaurantId, ...visible };
-  if (category !== undefined) filter.category = category;
-  const items = await MenuItem.find(filter).lean();
-  return items.map((item) => toDTO(item));
+// Menu order: category order, then popular items, then by name.
+const inMenuOrder = (items, categories) => {
+  const positionOf = (item) => categories.get(String(item.categoryId))?.position ?? Infinity;
+  return [...items].sort(
+    (a, b) =>
+      positionOf(a) - positionOf(b) ||
+      Number(Boolean(b.popular)) - Number(Boolean(a.popular)) ||
+      a.title.localeCompare(b.title)
+  );
 };
 
+export const listMenuItems = async (restaurantId, categoryName) => {
+  const categories = await categoriesById(restaurantId);
+  const filter = { restaurantId, ...visible };
+  if (categoryName !== undefined) {
+    const match = [...categories.values()].find((category) => category.name === categoryName);
+    if (!match) return [];
+    filter.categoryId = match._id;
+  }
+  const items = await MenuItem.find(filter).lean();
+  return inMenuOrder(items, categories).map((item) => toDTO(item, categories));
+};
+
+// Names of the categories that have items, in menu order. Empty ones are not
+// shown to guests.
 export const listCategories = async (restaurantId) => {
-  const items = await MenuItem.find({ restaurantId, ...visible }).select("category").lean();
-  return [...new Set(items.map((item) => item.category))];
+  const categories = await categoriesById(restaurantId);
+  const used = new Set(
+    (await MenuItem.find({ restaurantId, ...visible }).select("categoryId").lean()).map((item) =>
+      String(item.categoryId)
+    )
+  );
+  return [...categories.values()]
+    .filter((category) => used.has(String(category._id)))
+    .map((category) => category.name);
 };
 
 export const getMenuItem = async (restaurantId, id) => {
   const item = await MenuItem.findOne({ _id: id, restaurantId, ...visible });
   if (!item) throw new AppError("NOT_FOUND", "Not found", 404);
-  return toDTO(item);
+  return toDTO(item, await categoriesById(restaurantId));
+};
+
+const assertOwnCategory = async (restaurantId, categoryId) => {
+  if (!(await findCategory(restaurantId, categoryId))) {
+    throw new AppError("VALIDATION", "Unknown category", 400, {
+      fields: { categoryId: "Unknown category" },
+    });
+  }
 };
 
 export const createMenuItem = async (restaurantId, input) => {
+  await assertOwnCategory(restaurantId, input.categoryId);
   try {
     const item = await MenuItem.create({
       restaurantId,
       title: input.title,
-      description: input.description,
+      description: input.description ?? "",
       price: currency(input.price).value,
       priceCents: toCents(input.price),
-      image: input.image,
-      category: input.category,
-      station: input.station || "kitchen",
+      image: input.image ?? null,
+      categoryId: input.categoryId,
       popular: input.popular ?? false,
       inStock: input.inStock ?? true,
     });
-    publishMenu(restaurantId, serializeMenuItem(item));
-    return toDTO(item);
+    const categories = await categoriesById(restaurantId);
+    publishMenu(restaurantId, serializeMenuItem(item, categories));
+    return toDTO(item, categories);
   } catch (error) {
     if (isDuplicateKey(error)) {
       throw new AppError("VALIDATION", "Item already exists", 409);
@@ -103,6 +149,7 @@ export const updateMenuItem = async (restaurantId, id, input) => {
   }
   const keys = Object.keys(patch);
   if (keys.length === 0) return getMenuItem(restaurantId, id);
+  if (patch.categoryId !== undefined) await assertOwnCategory(restaurantId, patch.categoryId);
 
   const item = await MenuItem.findOneAndUpdate(
     { _id: id, restaurantId, ...visible },
@@ -110,8 +157,9 @@ export const updateMenuItem = async (restaurantId, id, input) => {
     { new: true, runValidators: true }
   );
   if (!item) throw new AppError("NOT_FOUND", "Not found", 404);
-  publishMenu(restaurantId, serializeMenuItem(item));
-  return toDTO(item);
+  const categories = await categoriesById(restaurantId);
+  publishMenu(restaurantId, serializeMenuItem(item, categories));
+  return toDTO(item, categories);
 };
 
 export const archiveMenuItem = async (restaurantId, id) => {
@@ -121,7 +169,7 @@ export const archiveMenuItem = async (restaurantId, id) => {
     { new: true }
   );
   if (!item) throw new AppError("NOT_FOUND", "Not found", 404);
-  publishMenu(restaurantId, serializeMenuItem(item));
+  publishMenu(restaurantId, serializeMenuItem(item, await categoriesById(restaurantId)));
   return item;
 };
 

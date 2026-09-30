@@ -1,25 +1,33 @@
+import mongoose from "mongoose";
 import { z } from "zod";
 
+const objectId = (message) =>
+  z.string({ error: message }).refine((value) => mongoose.Types.ObjectId.isValid(value), message);
+
 const menuFields = {
-  title: z.string().min(3, "Title must be at least 3 characters long"),
-  description: z.string().min(1, "Description must be a string"),
+  title: z.string().trim().min(3, "Title must be at least 3 characters long"),
+  description: z.string().trim().max(500, "Description is too long"),
   price: z.coerce.number().positive("Price must be a number"),
-  image: z.string().min(1, "Image must be a string"),
-  category: z.string().min(1, "Category must be a string"),
-  station: z.enum(["kitchen", "bar"]).optional(),
-  popular: z.boolean().optional(),
-  inStock: z.boolean().optional(),
+  // An uploaded (Cloudinary) or pasted link; null removes the image.
+  image: z
+    .string()
+    .trim()
+    .url("Image must be a link")
+    .startsWith("https://", "Image link must start with https://")
+    .nullable(),
+  categoryId: objectId("Category is required"),
+  popular: z.boolean(),
+  inStock: z.boolean(),
 };
 
 export const createMenuSchema = z.object({
   title: menuFields.title,
-  description: menuFields.description,
+  description: menuFields.description.optional(),
   price: menuFields.price,
-  image: menuFields.image,
-  category: menuFields.category,
-  station: menuFields.station,
-  popular: menuFields.popular,
-  inStock: menuFields.inStock,
+  image: menuFields.image.optional(),
+  categoryId: menuFields.categoryId,
+  popular: menuFields.popular.optional(),
+  inStock: menuFields.inStock.optional(),
 });
 
 export const updateMenuSchema = z.object(menuFields).partial();

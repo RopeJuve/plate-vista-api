@@ -64,7 +64,14 @@ const seedAdmin = async (overrides = {}) => {
     role: "admin",
     ...overrides,
   });
-  return generateToken(employee);
+  const { default: Category } = await import("../../src/modules/categories/category.model.js");
+  const category = await Category.create({
+    restaurantId: restaurant._id,
+    name: "food",
+    station: "kitchen",
+    position: 1,
+  });
+  return { token: generateToken(employee), categoryId: String(category._id) };
 };
 
 test("registering and fetching a user never returns a password field, at any nesting depth", async () => {
@@ -107,7 +114,7 @@ test("protected routes 401 without a token and 403 with the wrong role", async (
 });
 
 test("mass assignment: numSold cannot be set through the update body", async () => {
-  const token = await seedAdmin({ employee: "admin_bob" });
+  const { token, categoryId } = await seedAdmin({ employee: "admin_bob" });
 
   const created = await request(app)
     .post("/api/v1/menu-items")
@@ -116,8 +123,8 @@ test("mass assignment: numSold cannot be set through the update body", async () 
       title: "Test Pizza",
       description: "desc",
       price: 10,
-      image: "x.png",
-      category: "food",
+      image: "https://img.example/x.png",
+      categoryId,
     });
   assert.equal(created.status, 201);
   assert.equal(created.body.numSold, 0);
@@ -131,7 +138,7 @@ test("mass assignment: numSold cannot be set through the update body", async () 
 });
 
 test("REST order writes are not accepted", async () => {
-  const adminToken = await seedAdmin({
+  const { token: adminToken } = await seedAdmin({
     employee: "admin_dana",
     email: "dana@example.com",
   });

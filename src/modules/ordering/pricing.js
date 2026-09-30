@@ -1,5 +1,6 @@
 import currency from "currency.js";
 import MenuItem from "../menu/menuItem.model.js";
+import Category from "../categories/category.model.js";
 import { AppError } from "../../shared/errors.js";
 import { MAX_QUANTITY } from "./order.schemas.js";
 
@@ -44,6 +45,14 @@ export const priceItems = async (restaurantId, items, mongoSession) => {
       productIds: outOfStock.map((item) => String(item.productId)),
     });
   }
+  // Each line keeps the station and category name it was ordered with, so a
+  // later change to the category never moves an open ticket.
+  const categories = await Category.find({
+    _id: { $in: products.map((product) => product.categoryId) },
+    restaurantId,
+  }).session(mongoSession);
+  const categoryOf = new Map(categories.map((category) => [String(category._id), category]));
+
   let total = currency(0);
   const priced = merged.map((item) => {
     const product = byId.get(String(item.productId));
@@ -58,7 +67,8 @@ export const priceItems = async (restaurantId, items, mongoSession) => {
       lineTotalCents: line.intValue,
       notes: item.notes || "",
       status: "pending",
-      station: product.station || "kitchen",
+      station: categoryOf.get(String(product.categoryId))?.station || "kitchen",
+      category: categoryOf.get(String(product.categoryId))?.name,
     };
   });
 

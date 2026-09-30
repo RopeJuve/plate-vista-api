@@ -10,12 +10,13 @@ const menuItemSchema = new Schema(
       index: true,
     },
     title: { type: String, required: true },
-    description: { type: String, required: true },
+    description: { type: String, default: "" },
     price: { type: Number, required: true },
     priceCents: { type: Number, required: true },
-    image: { type: String, required: true },
-    category: { type: String, required: true },
-    station: { type: String, enum: ["kitchen", "bar"], default: "kitchen" },
+    // No image means guests see the placeholder for the item's station.
+    image: { type: String, default: null },
+    // The category also decides the station (docs/adr/0001-station-belongs-to-category.md).
+    categoryId: { type: Schema.Types.ObjectId, ref: "Category", required: true },
     popular: { type: Boolean, default: false },
     numSold: { type: Number, default: 0 },
     inStock: { type: Boolean, default: true },

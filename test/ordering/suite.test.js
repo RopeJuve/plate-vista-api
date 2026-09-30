@@ -5,7 +5,7 @@ process.env.DEPLOY_TARGET = "local";
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
 import { WebSocket } from "ws";
@@ -25,7 +25,7 @@ import {
   updateOrder,
 } from "../../src/modules/ordering/order.service.js";
 import { closeSession, openOrJoinSessionSafe } from "../../src/modules/ordering/session.service.js";
-import { getTotalSales } from "../../src/modules/ordering/order.stats.js";
+import { getSalesByMenuItem, getTotalSales } from "../../src/modules/ordering/order.stats.js";
 import Order from "../../src/modules/ordering/order.model.js";
 import TableSession from "../../src/modules/ordering/session.model.js";
 import MenuItem from "../../src/modules/menu/menuItem.model.js";
@@ -33,6 +33,8 @@ import Table from "../../src/modules/tables/table.model.js";
 import Employee from "../../src/modules/staff/employee.model.js";
 import User from "../../src/modules/staff/user.model.js";
 import Restaurant from "../../src/modules/restaurants/restaurant.model.js";
+import Category from "../../src/modules/categories/category.model.js";
+import { registerRestaurant } from "../../src/modules/staff/staff.service.js";
 
 let replset;
 let app;
@@ -110,6 +112,12 @@ const guestCtx = (fixture, session, requestId = randomUUID()) => ({
 
 const itemsOf = (item, quantity = 1) => [{ productId: String(item._id), quantity }];
 
+// The restaurant's category with this name, created on first use.
+let categoryPosition = 0;
+const categoryIn = async (restaurantId, name = "food", station = "kitchen") =>
+  (await Category.findOne({ restaurantId, name })) ||
+  Category.create({ restaurantId, name, station, position: (categoryPosition += 1) });
+
 const fixture = async () => {
   sequence += 1;
   const suffix = `${sequence}-${randomUUID().slice(0, 8)}`;
@@ -134,7 +142,7 @@ const fixture = async () => {
     price: 10,
     priceCents: 1000,
     image: "x.png",
-    category: "food",
+    categoryId: (await categoryIn(restaurant._id, "food", "kitchen"))._id,
     inStock: true,
   });
   return { restaurant, employee, table, item, token: generateToken(employee) };
@@ -293,7 +301,7 @@ test("creating an order with 10 items performs 1 menu query", async () => {
         price: 3,
         priceCents: 300,
         image: "x.png",
-        category: "food",
+        categoryId: (await categoryIn(place.restaurant._id))._id,
         inStock: true,
       })
     );
@@ -1174,6 +1182,464 @@ test("resending order.create returns the same ack and emits order.created once",
   staff.ws.close();
 });
 
+test("statistics report sales per day, dish, and category in the restaurant's time zone", async () => {
+  const place = await fixture();
+  const beer = await MenuItem.create({
+    restaurantId: place.restaurant._id,
+    title: "Bier",
+    description: "desc",
+    price: 4,
+    priceCents: 400,
+    image: "x.png",
+    categoryId: (await categoryIn(place.restaurant._id, "drinks", "bar"))._id,
+    inStock: true,
+  });
+  const order = async (items) =>
+    (
+      await createOrder(staffCtx(place), {
+        clientOrderId: randomUUID(),
+        tableId: String(place.table._id),
+        items,
+      })
+    ).order;
+  const late = await order([...itemsOf(place.item, 2), ...itemsOf(beer, 3)]);
+  const next = await order(itemsOf(beer, 1));
+  const cancelled = await order(itemsOf(place.item, 5));
+  const move = (id, set) => Order.collection.updateOne({ _id: new mongoose.Types.ObjectId(id) }, set);
+  // 23:30 UTC is already the next day in Berlin, where this restaurant is.
+  await move(late._id, { $set: { createdAt: new Date("2026-09-27T23:30:00Z") } });
+  await move(next._id, { $set: { createdAt: new Date("2026-09-29T10:00:00Z") } });
+  // Orders placed before line items carried their category still count.
+  await move(next._id, { $unset: { "items.$[].category": "" } });
+  await move(cancelled._id, { $set: { status: "cancelled", createdAt: new Date("2026-09-29T11:00:00Z") } });
+
+  const get = (url) =>
+    request(app).get(`/api/v1/statistics${url}`).set("Authorization", `Bearer ${place.token}`);
+  const range = "start_date=2026-09-27T00:00:00Z&end_date=2026-09-30T00:00:00Z";
+
+  const summary = await get(`/summary?${range}`);
+  assert.equal(summary.status, 200);
+  assert.deepEqual(summary.body, {
+    ordersCount: 2,
+    totalCents: 3600,
+    averageOrderCents: 1800,
+    itemsSold: 6,
+    topItem: { menu_item: "Bier", numSold: 4, totalCents: 1600 },
+  });
+  const allTime = await get("/summary");
+  assert.equal(allTime.body.totalCents, 3600);
+  const empty = await get("/summary?start_date=2020-01-01T00:00:00Z&end_date=2020-01-02T00:00:00Z");
+  assert.deepEqual(empty.body, {
+    ordersCount: 0,
+    totalCents: 0,
+    averageOrderCents: 0,
+    itemsSold: 0,
+    topItem: null,
+  });
+
+  const byDay = await get(`/orders/by-date?${range}`);
+  assert.equal(byDay.status, 200);
+  assert.deepEqual(
+    byDay.body.map(({ date, ordersCount, totalCents }) => ({ date, ordersCount, totalCents })),
+    [
+      { date: "2026-09-28", ordersCount: 1, totalCents: 3200 },
+      { date: "2026-09-29", ordersCount: 1, totalCents: 400 },
+    ]
+  );
+  const byMonth = await get("/orders/by-date?group_by=month");
+  assert.deepEqual(
+    byMonth.body.map(({ date, ordersCount }) => ({ date, ordersCount })),
+    [{ date: "2026-09", ordersCount: 2 }]
+  );
+
+  const top = await get("/sales/menu-items?limit=1");
+  assert.deepEqual(
+    top.body.map(({ menu_item, numSold, totalCents }) => ({ menu_item, numSold, totalCents })),
+    [{ menu_item: "Bier", numSold: 4, totalCents: 1600 }]
+  );
+
+  const categories = await get(`/sales/categories?${range}`);
+  assert.equal(categories.status, 200);
+  assert.deepEqual(categories.body, [
+    { date: "2026-09-28", category: "drinks", numSold: 3, totalCents: 1200 },
+    { date: "2026-09-28", category: "food", numSold: 2, totalCents: 2000 },
+    { date: "2026-09-29", category: "drinks", numSold: 1, totalCents: 400 },
+  ]);
+  const categoriesByMonth = await get("/sales/categories?group_by=month");
+  assert.deepEqual(categoriesByMonth.body, [
+    { date: "2026-09", category: "drinks", numSold: 4, totalCents: 1600 },
+    { date: "2026-09", category: "food", numSold: 2, totalCents: 2000 },
+  ]);
+
+  const halfRange = await get("/summary?start_date=2026-09-27T00:00:00Z");
+  assert.equal(halfRange.status, 400);
+});
+
+test("a new restaurant starts with the default categories in menu order", async () => {
+  const suffix = randomUUID().slice(0, 8);
+  const { employee } = await registerRestaurant({
+    restaurantName: `Defaults ${suffix}`,
+    slug: `defaults-${suffix}`,
+    employee: "Owner Name",
+    email: `defaults-${suffix}@example.com`,
+    password: "supersecret1",
+  });
+  const listed = await request(app)
+    .get("/api/v1/categories")
+    .set("Authorization", `Bearer ${generateToken(employee)}`);
+  assert.equal(listed.status, 200);
+  assert.deepEqual(
+    listed.body.map((category) => category.name),
+    [
+      "Starters", "Soups", "Salads", "Pizza", "Pasta", "Burgers", "Main Courses",
+      "Sides", "Desserts", "Soft Drinks", "Hot Drinks", "Beer", "Wine", "Cocktails",
+    ]
+  );
+  assert.equal(listed.body.find((category) => category.name === "Beer").station, "bar");
+  assert.equal(listed.body.find((category) => category.name === "Pizza").station, "kitchen");
+});
+
+test("owners manage categories: unique names, station, order, and delete only when empty", async () => {
+  await Category.init();
+  const place = await fixture();
+  const as = (method, url) =>
+    request(app)[method](`/api/v1/categories${url}`).set("Authorization", `Bearer ${place.token}`);
+  const names = async () => (await as("get", "")).body.map((category) => category.name);
+
+  const cocktails = await as("post", "").send({ name: "Cocktails", station: "bar" });
+  assert.equal(cocktails.status, 201);
+  assert.equal(cocktails.body.station, "bar");
+  const again = await as("post", "").send({ name: " cocktails ", station: "bar" });
+  assert.equal(again.status, 409);
+  assert.equal(again.body.message, "A category with this name already exists");
+  const badStation = await as("post", "").send({ name: "Shots", station: "cellar" });
+  assert.equal(badStation.status, 400);
+  assert.deepEqual(await names(), ["food", "Cocktails"]);
+
+  const renamed = await as("put", `/${cocktails.body._id}`).send({ name: "Signature Cocktails" });
+  assert.equal(renamed.status, 200);
+  assert.equal(renamed.body.name, "Signature Cocktails");
+  assert.equal(renamed.body.station, "bar");
+
+  const moved = await as("post", `/${cocktails.body._id}/move`).send({ direction: "up" });
+  assert.equal(moved.status, 200);
+  assert.deepEqual(await names(), ["Signature Cocktails", "food"]);
+  const stuck = await as("post", `/${cocktails.body._id}/move`).send({ direction: "up" });
+  assert.equal(stuck.status, 200);
+  assert.deepEqual(await names(), ["Signature Cocktails", "food"]);
+
+  const food = await categoryIn(place.restaurant._id);
+  const inUse = await as("delete", `/${food._id}`);
+  assert.equal(inUse.status, 409);
+  assert.equal(inUse.body.message, "Move its 1 item to another category first");
+  const emptied = await as("delete", `/${cocktails.body._id}`);
+  assert.equal(emptied.status, 204);
+  assert.deepEqual(await names(), ["food"]);
+});
+
+test("orders go to the station of the item's category; a change affects new orders only", async () => {
+  const place = await fixture();
+  const beerCategory = await categoryIn(place.restaurant._id, "Beer", "bar");
+  const beer = await MenuItem.create({
+    restaurantId: place.restaurant._id,
+    title: "Pils",
+    price: 4,
+    priceCents: 400,
+    categoryId: beerCategory._id,
+  });
+  const order = async () =>
+    (
+      await createOrder(staffCtx(place), {
+        clientOrderId: randomUUID(),
+        tableId: String(place.table._id),
+        items: itemsOf(beer),
+      })
+    ).order;
+  const first = await order();
+  assert.equal(first.items[0].station, "bar");
+
+  const changed = await request(app)
+    .put(`/api/v1/categories/${beerCategory._id}`)
+    .set("Authorization", `Bearer ${place.token}`)
+    .send({ station: "kitchen" });
+  assert.equal(changed.status, 200);
+  const second = await order();
+  assert.equal(second.items[0].station, "kitchen");
+  const firstNow = await Order.findOne({ _id: first._id, restaurantId: place.restaurant._id });
+  assert.equal(firstNow.items[0].station, "bar");
+});
+
+// A restaurant with a bar item next to the fixture's kitchen item.
+const withBeer = async () => {
+  const place = await fixture();
+  const beer = await MenuItem.create({
+    restaurantId: place.restaurant._id,
+    title: "Pils",
+    price: 4,
+    priceCents: 400,
+    categoryId: (await categoryIn(place.restaurant._id, "Beer", "bar"))._id,
+  });
+  const order = async (items, ctx = staffCtx(place)) =>
+    (
+      await createOrder(ctx, {
+        clientOrderId: randomUUID(),
+        tableId: String(place.table._id),
+        items,
+      })
+    ).order;
+  const move = async (orderId, status, station) =>
+    (await changeStatus(staffCtx(place), { orderId, status, station })).order;
+  const statuses = (order) =>
+    Object.fromEntries(order.tickets.map((ticket) => [ticket.station, ticket.status]));
+  return { place, beer, order, move, statuses };
+};
+
+test("drinks and food in one order get a ticket each, and each station moves its own", async () => {
+  const { place, beer, order, move, statuses } = await withBeer();
+  const mixed = await order([...itemsOf(beer, 2), ...itemsOf(place.item, 1)]);
+  assert.equal(mixed.status, "pending");
+  assert.deepEqual(statuses(mixed), { kitchen: "pending", bar: "pending" });
+  const drinksOnly = await order(itemsOf(beer));
+  assert.deepEqual(statuses(drinksOnly), { bar: "pending" });
+  await assert.rejects(
+    () => move(drinksOnly._id, "accepted", "kitchen"),
+    (error) => error.code === "NOT_FOUND"
+  );
+
+  // The bar serves the beers while the kitchen has not even accepted.
+  clearPublished();
+  const accepted = await move(mixed._id, "accepted", "bar");
+  assert.deepEqual(statuses(accepted), { kitchen: "pending", bar: "accepted" });
+  assert.equal(accepted.status, "pending");
+  assert.equal(accepted.rev, 2);
+  const event = published.find((entry) => entry.message?.event === "order.statusChanged").message.data;
+  assert.equal(event.station, "bar");
+  assert.equal(event.status, "pending");
+  assert.deepEqual(event.tickets, accepted.tickets);
+  for (const status of ["preparing", "ready", "served"]) await move(mixed._id, status, "bar");
+
+  // Any started ticket locks the order, and a ticket cannot skip a step.
+  await assert.rejects(
+    () => updateOrder(staffCtx(place), { orderId: mixed._id, items: itemsOf(beer, 1) }),
+    (error) => error.code === "INVALID_TRANSITION" && error.details.from === "served"
+  );
+  await assert.rejects(
+    () => move(mixed._id, "ready", "kitchen"),
+    (error) => error.code === "INVALID_TRANSITION" && error.details.from === "pending"
+  );
+
+  await move(mixed._id, "accepted", "kitchen");
+  const cooking = await move(mixed._id, "preparing", "kitchen");
+  assert.deepEqual(statuses(cooking), { kitchen: "preparing", bar: "served" });
+  assert.equal(cooking.status, "preparing");
+
+  // A client that does not name a station moves the ticket holding the order back.
+  const ready = await move(mixed._id, "ready");
+  assert.deepEqual(statuses(ready), { kitchen: "ready", bar: "served" });
+  const served = await move(mixed._id, "served", "kitchen");
+  assert.equal(served.status, "served");
+
+  const stored = await Order.findOne({ _id: mixed._id, restaurantId: place.restaurant._id });
+  assert.deepEqual(
+    stored.items.map((line) => [line.station, line.status]).sort(),
+    [["bar", "served"], ["kitchen", "served"]]
+  );
+  assert.deepEqual(
+    stored.statusHistory.slice(1, 3).map((entry) => [entry.status, entry.station]),
+    [["accepted", "bar"], ["preparing", "bar"]]
+  );
+});
+
+test("staff can cancel one ticket; its lines leave the bill, the stock count, and the statistics", async () => {
+  const { place, beer, order, move, statuses } = await withBeer();
+  const mixed = await order([...itemsOf(beer, 2), ...itemsOf(place.item, 1)]);
+  assert.equal(mixed.totalCents, 1800);
+  await move(mixed._id, "accepted", "bar");
+
+  const session = await TableSession.findOne({ _id: mixed.sessionId, restaurantId: place.restaurant._id });
+  const asGuest = guestCtx(place, session);
+  await assert.rejects(
+    () => cancelOrder(asGuest, { orderId: mixed._id, reason: "changed mind" }),
+    (error) => error.code === "INVALID_TRANSITION" && error.details.from === "accepted"
+  );
+  await assert.rejects(
+    () => cancelOrder(asGuest, { orderId: mixed._id, station: "kitchen" }),
+    (error) => error.code === "FORBIDDEN"
+  );
+
+  clearPublished();
+  const { order: noPizza } = await cancelOrder(staffCtx(place), {
+    orderId: mixed._id,
+    station: "kitchen",
+    reason: "no dough",
+  });
+  assert.deepEqual(statuses(noPizza), { kitchen: "cancelled", bar: "accepted" });
+  assert.equal(noPizza.tickets.find((ticket) => ticket.station === "kitchen").cancelReason, "no dough");
+  assert.equal(noPizza.status, "accepted");
+  assert.equal(noPizza.totalCents, 800);
+  const event = published.find((entry) => entry.message?.event === "order.statusChanged").message.data;
+  assert.equal(event.station, "kitchen");
+  assert.equal(event.reason, "no dough");
+  assert.equal(event.totalCents, 800);
+
+  const sold = async (item) =>
+    (await MenuItem.findOne({ _id: item._id, restaurantId: place.restaurant._id })).numSold;
+  assert.equal(await sold(place.item), 0);
+  assert.equal(await sold(beer), 2);
+  const bill = await getSessionBill(staffCtx(place), mixed.sessionId);
+  assert.equal(bill.totalCents, 800);
+  assert.equal((await getTotalSales(place.restaurant._id, {})).totalCents, 800);
+  const byItem = await getSalesByMenuItem(place.restaurant._id, {});
+  assert.deepEqual(byItem.map((row) => [row.menu_item, row.numSold]), [["Pils", 2]]);
+
+  await assert.rejects(
+    () => cancelOrder(staffCtx(place), { orderId: mixed._id, station: "kitchen" }),
+    (error) => error.code === "INVALID_TRANSITION"
+  );
+
+  // The order is cancelled only when its last ticket is.
+  const { order: gone } = await cancelOrder(staffCtx(place), { orderId: mixed._id, reason: "left" });
+  assert.equal(gone.status, "cancelled");
+  assert.equal(await sold(beer), 0);
+  assert.equal((await getSessionBill(staffCtx(place), mixed.sessionId)).orders.length, 0);
+});
+
+test("editing a pending order rebuilds its tickets", async () => {
+  const { place, beer, order, statuses } = await withBeer();
+  const pizzaOnly = await order(itemsOf(place.item));
+  assert.deepEqual(statuses(pizzaOnly), { kitchen: "pending" });
+  const edit = async (items) =>
+    (await updateOrder(staffCtx(place), { orderId: pizzaOnly._id, items })).order;
+  assert.deepEqual(statuses(await edit([...itemsOf(place.item), ...itemsOf(beer)])), {
+    kitchen: "pending",
+    bar: "pending",
+  });
+  assert.deepEqual(statuses(await edit(itemsOf(beer))), { bar: "pending" });
+});
+
+test("an order saved before tickets existed is worked as one ticket per station", async () => {
+  const { place, beer, order, move, statuses } = await withBeer();
+  const old = await order([...itemsOf(beer), ...itemsOf(place.item)]);
+  await Order.collection.updateOne(
+    { _id: new mongoose.Types.ObjectId(old._id) },
+    { $set: { status: "accepted", "items.$[].status": "accepted" }, $unset: { tickets: "" } }
+  );
+  const read = await getOrder(place.restaurant._id, old._id);
+  assert.deepEqual(statuses(read), { kitchen: "accepted", bar: "accepted" });
+  const moved = await move(old._id, "preparing", "bar");
+  assert.deepEqual(statuses(moved), { kitchen: "accepted", bar: "preparing" });
+});
+
+test("menu items need no image or description; links must be https and the category ours", async () => {
+  const place = await fixture();
+  const other = await fixture();
+  const drinks = await categoryIn(place.restaurant._id, "Soft Drinks", "bar");
+  const create = (body) =>
+    request(app)
+      .post("/api/v1/menu-items")
+      .set("Authorization", `Bearer ${place.token}`)
+      .send({ price: 3, categoryId: String(drinks._id), ...body });
+
+  const plain = await create({ title: "Cola 0.33" });
+  assert.equal(plain.status, 201);
+  assert.equal(plain.body.image, null);
+  assert.equal(plain.body.description, "");
+  assert.equal(plain.body.category, "Soft Drinks");
+  assert.equal(plain.body.station, "bar");
+
+  const insecure = await create({ title: "Fanta", image: "http://img.example/fanta.jpg" });
+  assert.equal(insecure.status, 400);
+  const linked = await create({ title: "Sprite", image: "https://img.example/sprite.jpg" });
+  assert.equal(linked.status, 201);
+  assert.equal(linked.body.image, "https://img.example/sprite.jpg");
+  const cleared = await request(app)
+    .put(`/api/v1/menu-items/${linked.body._id}`)
+    .set("Authorization", `Bearer ${place.token}`)
+    .send({ image: null });
+  assert.equal(cleared.status, 200);
+  assert.equal(cleared.body.image, null);
+
+  const foreign = await create({
+    title: "Water",
+    categoryId: String((await categoryIn(other.restaurant._id))._id),
+  });
+  assert.equal(foreign.status, 400);
+  assert.equal(foreign.body.message, "Unknown category");
+  const missing = await create({ title: "Juice", categoryId: undefined });
+  assert.equal(missing.status, 400);
+});
+
+test("the guest menu follows category order, hides empty categories, and lists popular items first", async () => {
+  const place = await fixture();
+  const drinks = await categoryIn(place.restaurant._id, "Drinks", "bar");
+  await categoryIn(place.restaurant._id, "Nothing Here", "kitchen");
+  const food = await categoryIn(place.restaurant._id);
+  const add = (title, categoryId, popular = false) =>
+    MenuItem.create({
+      restaurantId: place.restaurant._id,
+      title,
+      price: 5,
+      priceCents: 500,
+      categoryId,
+      popular,
+    });
+  await add("Zucchini Fries", food._id, true);
+  await add("Apple Salad", food._id);
+  await add("Cola", drinks._id);
+
+  const menu = await request(app).get(`/api/v1/r/${place.restaurant.slug}/menu-items`);
+  assert.equal(menu.status, 200);
+  assert.deepEqual(
+    menu.body.map((item) => item.title),
+    ["Zucchini Fries", "Apple Salad", "Pizza", "Cola"]
+  );
+  assert.equal(menu.body.find((item) => item.title === "Cola").station, "bar");
+  assert.equal(menu.body.find((item) => item.title === "Cola").category, "Drinks");
+
+  const categories = await request(app).get(`/api/v1/r/${place.restaurant.slug}/menu-items/category`);
+  assert.deepEqual(categories.body, ["food", "Drinks"]);
+});
+
+test("image uploads are signed for the restaurant's own Cloudinary folder", async () => {
+  const place = await fixture();
+  const sign = () =>
+    request(app)
+      .post("/api/v1/menu-items/upload-signature")
+      .set("Authorization", `Bearer ${place.token}`);
+  const saved = {
+    CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME,
+    CLOUDINARY_API_KEY: process.env.CLOUDINARY_API_KEY,
+    CLOUDINARY_API_SECRET: process.env.CLOUDINARY_API_SECRET,
+  };
+  try {
+    delete process.env.CLOUDINARY_API_SECRET;
+    const unconfigured = await sign();
+    assert.equal(unconfigured.status, 503);
+
+    Object.assign(process.env, {
+      CLOUDINARY_CLOUD_NAME: "demo-cloud",
+      CLOUDINARY_API_KEY: "123456",
+      CLOUDINARY_API_SECRET: "shh",
+    });
+    const signed = await sign();
+    assert.equal(signed.status, 200);
+    const folder = `plate-vista/${place.restaurant._id}/menu`;
+    assert.equal(signed.body.folder, folder);
+    assert.equal(signed.body.cloudName, "demo-cloud");
+    assert.equal(signed.body.apiKey, "123456");
+    assert.equal(
+      signed.body.signature,
+      createHash("sha1").update(`folder=${folder}&timestamp=${signed.body.timestamp}shh`).digest("hex")
+    );
+    assert.equal(JSON.stringify(signed.body).includes("shh"), false);
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
 test("out of stock, validation, and permission errors include structured details", async () => {
   const place = await fixture();
   const other = await Table.create({
@@ -1491,6 +1957,12 @@ const AUTHENTICATED_ROUTES = [
   "GET /api/v1/menu-items/:id",
   "PUT /api/v1/menu-items/:id",
   "DELETE /api/v1/menu-items/:id",
+  "POST /api/v1/menu-items/upload-signature",
+  "GET /api/v1/categories",
+  "POST /api/v1/categories",
+  "PUT /api/v1/categories/:id",
+  "POST /api/v1/categories/:id/move",
+  "DELETE /api/v1/categories/:id",
   "GET /api/v1/orders",
   "POST /api/v1/orders",
   "GET /api/v1/orders/:id",
@@ -1506,6 +1978,8 @@ const AUTHENTICATED_ROUTES = [
   "PUT /api/v1/table/:id",
   "DELETE /api/v1/table/:id",
   "GET /api/v1/statistics/sales",
+  "GET /api/v1/statistics/summary",
+  "GET /api/v1/statistics/sales/categories",
   "GET /api/v1/statistics/sales/menu-items",
   "GET /api/v1/statistics/orders/by-date",
   "GET /api/v1/statistics/customers/top",
@@ -1575,7 +2049,7 @@ test("cross-tenant lists, creates, stats, public menu, and sockets stay inside r
     price: 2,
     priceCents: 200,
     image: "h.png",
-    category: "food",
+    categoryId: (await categoryIn(a.restaurant._id))._id,
     inStock: false,
     archived: true,
   });
@@ -1586,7 +2060,7 @@ test("cross-tenant lists, creates, stats, public menu, and sockets stay inside r
     price: 8,
     priceCents: 800,
     image: "s.png",
-    category: `secret-${tag}`,
+    categoryId: (await categoryIn(b.restaurant._id, `secret-${tag}`))._id,
     inStock: true,
   });
   const userA = await User.create({
@@ -1681,8 +2155,8 @@ test("cross-tenant lists, creates, stats, public menu, and sockets stay inside r
     title: `Bisque ${tag}`,
     description: "soup",
     price: 4,
-    image: "b.png",
-    category: "food",
+    image: "https://img.example/b.png",
+    categoryId: String((await categoryIn(a.restaurant._id))._id),
     restaurantId: String(b.restaurant._id),
   });
   cover("POST", "/api/v1/menu-items");
@@ -1690,6 +2164,46 @@ test("cross-tenant lists, creates, stats, public menu, and sockets stay inside r
   assert.equal(String(createdMenu.body.restaurantId), String(a.restaurant._id));
   assert.ok(await MenuItem.findOne({ _id: createdMenu.body._id, restaurantId: a.restaurant._id }));
   assert.equal(await MenuItem.countDocuments({ restaurantId: b.restaurant._id }), bMenuBefore);
+
+  // B's category: invisible to A, and A can neither change, move, delete, nor use it.
+  const bCategory = await categoryIn(b.restaurant._id, `B-only ${tag}`);
+  const aCategories = await asA("get", "/api/v1/categories");
+  cover("GET", "/api/v1/categories");
+  assert.equal(aCategories.status, 200);
+  assert.equal(JSON.stringify(aCategories.body).includes(`B-only ${tag}`), false);
+  const aCategory = await asA("post", "/api/v1/categories").send({
+    name: `A-new ${tag}`,
+    station: "bar",
+    restaurantId: String(b.restaurant._id),
+  });
+  cover("POST", "/api/v1/categories");
+  assert.equal(aCategory.status, 201);
+  assert.ok(await Category.findOne({ _id: aCategory.body._id, restaurantId: a.restaurant._id }));
+  for (const [method, url, body, pattern] of [
+    ["put", `/api/v1/categories/${bCategory._id}`, { name: "taken over" }, "PUT /api/v1/categories/:id"],
+    ["post", `/api/v1/categories/${bCategory._id}/move`, { direction: "up" }, "POST /api/v1/categories/:id/move"],
+    ["delete", `/api/v1/categories/${bCategory._id}`, {}, "DELETE /api/v1/categories/:id"],
+  ]) {
+    const res = await asA(method, url).send(body);
+    cover(method.toUpperCase(), pattern.split(" ")[1]);
+    assert.equal(res.status, 404, pattern);
+  }
+  const bCategoryNow = await Category.findOne({ _id: bCategory._id, restaurantId: b.restaurant._id });
+  assert.equal(bCategoryNow.name, `B-only ${tag}`);
+  const intoB = await asA("post", "/api/v1/menu-items").send({
+    title: `Sneaky ${tag}`,
+    price: 4,
+    categoryId: String(bCategory._id),
+  });
+  assert.equal(intoB.status, 400);
+
+  const signature = await asA("post", "/api/v1/menu-items/upload-signature");
+  cover("POST", "/api/v1/menu-items/upload-signature");
+  if (signature.status === 200) {
+    assert.equal(signature.body.folder, `plate-vista/${a.restaurant._id}/menu`);
+  } else {
+    assert.equal(signature.status, 503);
+  }
 
   const bTablesBefore = await Table.countDocuments({ restaurantId: b.restaurant._id });
   const createdTable = await asA("post", "/api/v1/table").send({
@@ -1734,6 +2248,19 @@ test("cross-tenant lists, creates, stats, public menu, and sockets stay inside r
   cover("GET", "/api/v1/statistics/orders/by-date");
   assert.equal(byDate.status, 200);
   assert.equal(byDate.body.reduce((sum, row) => sum + row.ordersCount, 0), 1);
+
+  const summary = await asA("get", "/api/v1/statistics/summary");
+  cover("GET", "/api/v1/statistics/summary");
+  assert.equal(summary.status, 200);
+  assert.equal(summary.body.ordersCount, 1);
+  assert.equal(summary.body.totalCents, 2000);
+  assert.equal(summary.body.topItem.menu_item, "Pizza");
+
+  const byCategory = await asA("get", "/api/v1/statistics/sales/categories");
+  cover("GET", "/api/v1/statistics/sales/categories");
+  assert.equal(byCategory.status, 200);
+  assert.equal(byCategory.body.reduce((sum, row) => sum + row.numSold, 0), 2);
+  assert.equal(JSON.stringify(byCategory.body).includes(`Secret ${tag}`), false);
 
   const top = await asA("get", "/api/v1/statistics/customers/top");
   cover("GET", "/api/v1/statistics/customers/top");

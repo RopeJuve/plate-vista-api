@@ -16,6 +16,7 @@ import { parseOrThrow } from "../../shared/validate.js";
 import { anonymizeUser } from "../ordering/order.service.js";
 import { findByQrCode } from "../tables/table.service.js";
 import { openOrJoinSessionWithRetry } from "../ordering/session.service.js";
+import { ensureDefaultCategories } from "../categories/category.service.js";
 
 const registerSchema = z.object({
   restaurantName: z.string().trim().min(2),
@@ -114,6 +115,7 @@ export const registerRestaurant = async (input) => {
       position: "owner",
       role: "owner",
     });
+    await ensureDefaultCategories(restaurant._id);
     return { restaurant, employee };
   } catch (error) {
     if (isDuplicateKey(error)) {

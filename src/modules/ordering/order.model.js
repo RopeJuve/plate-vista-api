@@ -1,6 +1,7 @@
 import { Schema, model } from "mongoose";
 import { tenantPlugin } from "../../shared/tenantPlugin.js";
 import { ORDER_STATUSES } from "./order.transitions.js";
+import { STATIONS } from "../categories/category.model.js";
 
 const lineItemSchema = new Schema(
   {
@@ -12,6 +13,20 @@ const lineItemSchema = new Schema(
     notes: { type: String, default: "" },
     status: { type: String, default: "pending" },
     station: { type: String, enum: ["kitchen", "bar"], default: "kitchen" },
+    // Copied from the menu item like title and price, so stats keep the
+    // category the dish had when it was sold.
+    category: { type: String },
+  },
+  { _id: false }
+);
+
+// One station's part of the order, with its own status
+// (docs/adr/0002-one-order-with-a-ticket-per-station.md).
+const ticketSchema = new Schema(
+  {
+    station: { type: String, enum: STATIONS, required: true },
+    status: { type: String, enum: ORDER_STATUSES, default: "pending" },
+    cancelReason: { type: String, default: "" },
   },
   { _id: false }
 );
@@ -29,13 +44,17 @@ const orderSchema = new Schema(
     clientOrderId: { type: String, required: true },
     userId: { type: Schema.Types.ObjectId, ref: "User" },
     items: { type: [lineItemSchema], required: true },
+    tickets: { type: [ticketSchema], default: [] },
     totalCents: { type: Number, required: true },
+    // The slowest ticket that is not cancelled; kept in step with the tickets.
     status: { type: String, enum: ORDER_STATUSES, default: "pending" },
     statusHistory: [
       {
         status: { type: String, required: true },
         at: { type: Date, required: true },
         byEmployeeId: { type: Schema.Types.ObjectId, ref: "Employee" },
+        // The ticket that moved; absent when the whole order moved.
+        station: { type: String, enum: STATIONS },
       },
     ],
     cancelReason: { type: String },

@@ -7,6 +7,7 @@ import { publish } from "../../realtime/events.js";
 import { priceItems } from "./pricing.js";
 import { stock } from "./stock.js";
 import { assertTransition } from "./order.transitions.js";
+import { buildTickets, orderStatusOf, stationOf, ticketFields, ticketsOf } from "./tickets.js";
 import {
   cancelOrderSchema,
   createOrderSchema,
@@ -113,6 +114,34 @@ const quantityMap = (items, key) => {
   return map;
 };
 
+// Matches the order only if nothing has changed it since it was read.
+const unchanged = (order) => ({
+  _id: order._id,
+  restaurantId: order.restaurantId,
+  rev: order.rev,
+});
+
+// The tickets a message is about: the named station's, or without a station
+// the ones holding the order back (every ticket, when they are level).
+const ticketsFor = (tickets, station) => {
+  if (station) {
+    const ticket = tickets.find((candidate) => candidate.station === station);
+    if (!ticket) throw new AppError("NOT_FOUND", `This order has no ${station} ticket`, 404);
+    return [ticket];
+  }
+  const status = orderStatusOf(tickets);
+  return tickets.filter((ticket) => ticket.status === status);
+};
+
+const statusChange = (order, station) => ({
+  orderId: order._id,
+  status: order.status,
+  rev: order.rev,
+  tickets: order.tickets,
+  totalCents: order.totalCents,
+  ...(station ? { station } : {}),
+});
+
 const findExisting = async (restaurantId, clientOrderId) =>
   Order.findOne({ restaurantId, clientOrderId });
 
@@ -150,6 +179,7 @@ export const createOrder = async (ctx, input) => {
                     ? ctx.actor.id
                     : undefined,
                 items: priced.items,
+                tickets: buildTickets(priced.items),
                 totalCents: priced.totalCents,
                 status: "pending",
                 rev: 1,
@@ -213,12 +243,14 @@ export const updateOrder = async (ctx, input) => {
       if (ctx.actor?.type === "guest") {
         await assertBoundGuestSession(ctx, mongoSession);
       }
-      if (current.status !== "pending") {
+      // Once any station has started on its ticket the order is locked.
+      const started = ticketsOf(current).find((ticket) => ticket.status !== "pending");
+      if (started) {
         throw new AppError(
           "INVALID_TRANSITION",
           "Only pending orders can be edited",
           undefined,
-          { from: current.status, to: "pending" }
+          { from: started.status, to: "pending" }
         );
       }
       const priced = await priceItems(ctx.restaurantId, payload.items, mongoSession);
@@ -230,8 +262,15 @@ export const updateOrder = async (ctx, input) => {
         delta: (next.get(productId) || 0) - (previous.get(productId) || 0),
       }));
       const updated = await Order.findOneAndUpdate(
-        { _id: current._id, restaurantId: ctx.restaurantId, status: "pending" },
-        { $set: { items: priced.items, totalCents: priced.totalCents }, $inc: { rev: 1 } },
+        unchanged(current),
+        {
+          $set: {
+            items: priced.items,
+            tickets: buildTickets(priced.items),
+            totalCents: priced.totalCents,
+          },
+          $inc: { rev: 1 },
+        },
         { new: true, session: mongoSession }
       );
       if (!updated) {
@@ -266,19 +305,31 @@ export const changeStatus = async (ctx, input) => {
       throw new AppError("FORBIDDEN", "Forbidden");
     }
     sessionId = String(order.sessionId);
-    assertTransition(order.status, payload.status);
     if (payload.status === "cancelled") {
-      return cancelOrder(ctx, { orderId: payload.orderId, reason: "Cancelled" });
+      return cancelOrder(ctx, {
+        orderId: payload.orderId,
+        reason: "Cancelled",
+        station: payload.station,
+      });
     }
+    const tickets = ticketsOf(order);
+    const moving = ticketsFor(tickets, payload.station);
+    if (moving.length === 0) assertTransition("cancelled", payload.status);
+    moving.forEach((ticket) => assertTransition(ticket.status, payload.status));
+    const from = moving[0].status;
+    moving.forEach((ticket) => {
+      ticket.status = payload.status;
+    });
     const updated = await Order.findOneAndUpdate(
-      { _id: order._id, restaurantId: ctx.restaurantId, status: order.status },
+      unchanged(order),
       {
-        $set: { status: payload.status, "items.$[].status": payload.status },
+        $set: ticketFields(order, tickets),
         $push: {
           statusHistory: {
             status: payload.status,
             at: new Date(),
             byEmployeeId: ctx.actor.id,
+            ...(payload.station ? { station: payload.station } : {}),
           },
         },
         $inc: { rev: 1 },
@@ -288,17 +339,18 @@ export const changeStatus = async (ctx, input) => {
     if (!updated) {
       throw new AppError(
         "INVALID_TRANSITION",
-        `Cannot change status from ${order.status} to ${payload.status}`,
+        `Cannot change status from ${from} to ${payload.status}`,
         undefined,
-        { from: order.status, to: payload.status }
+        { from, to: payload.status }
       );
     }
     const dto = serializeOrder(updated);
-    publishOrder(ctx.restaurantId, dto.sessionId, "order.statusChanged", {
-      orderId: dto._id,
-      status: dto.status,
-      rev: dto.rev,
-    });
+    publishOrder(
+      ctx.restaurantId,
+      dto.sessionId,
+      "order.statusChanged",
+      statusChange(dto, payload.station)
+    );
     return { order: dto };
   } catch (error) {
     logFailure(ctx, sessionId, error);
@@ -323,38 +375,57 @@ export const cancelOrder = async (ctx, input) => {
       if (ctx.actor.type === "guest" && String(current.sessionId) !== String(ctx.actor.sessionId)) {
         throw new AppError("NOT_FOUND", "Not found", 404);
       }
+      const tickets = ticketsOf(current);
       if (ctx.actor.type === "guest") {
         await assertBoundGuestSession(ctx, mongoSession);
-        if (current.status !== "pending") {
+        // A guest cancels the whole order, and only before any station started.
+        if (payload.station) throw new AppError("FORBIDDEN", "Forbidden");
+        const started = tickets.find(
+          (ticket) => ticket.status !== "pending" && ticket.status !== "cancelled"
+        );
+        if (started) {
           throw new AppError(
             "INVALID_TRANSITION",
-            `Cannot change status from ${current.status} to cancelled`,
+            `Cannot change status from ${started.status} to cancelled`,
             undefined,
-            { from: current.status, to: "cancelled" }
+            { from: started.status, to: "cancelled" }
           );
         }
       }
-      assertTransition(current.status, "cancelled");
+      const cancelling = payload.station
+        ? ticketsFor(tickets, payload.station)
+        : tickets.filter((ticket) => ticket.status !== "cancelled");
+      if (cancelling.length === 0) assertTransition("cancelled", "cancelled");
+      cancelling.forEach((ticket) => assertTransition(ticket.status, "cancelled"));
+      const stations = new Set(cancelling.map((ticket) => ticket.station));
       await stock.adjust(
-        current.items.map((item) => ({ productId: item.productId, delta: -item.quantity })),
+        current.items
+          .filter((item) => stations.has(stationOf(item)))
+          .map((item) => ({ productId: item.productId, delta: -item.quantity })),
         ctx.restaurantId,
         mongoSession
       );
       const reason = payload.reason || "";
+      cancelling.forEach((ticket) => {
+        ticket.status = "cancelled";
+        ticket.cancelReason = reason;
+      });
+      const fields = ticketFields(current, tickets);
+      const wholeOrder = fields.status === "cancelled";
       const updated = await Order.findOneAndUpdate(
-        { _id: current._id, restaurantId: ctx.restaurantId, status: current.status },
+        unchanged(current),
         {
           $set: {
-            status: "cancelled",
-            cancelReason: reason,
-            ...(ctx.actor.type === "employee" ? { cancelledBy: ctx.actor.id } : {}),
-            "items.$[].status": "cancelled",
+            ...fields,
+            ...(wholeOrder ? { cancelReason: reason } : {}),
+            ...(wholeOrder && ctx.actor.type === "employee" ? { cancelledBy: ctx.actor.id } : {}),
           },
           $push: {
             statusHistory: {
               status: "cancelled",
               at: new Date(),
               byEmployeeId: ctx.actor.type === "employee" ? ctx.actor.id : null,
+              ...(payload.station ? { station: payload.station } : {}),
             },
           },
           $inc: { rev: 1 },
@@ -366,10 +437,8 @@ export const cancelOrder = async (ctx, input) => {
     });
     const dto = serializeOrder(order);
     publishOrder(ctx.restaurantId, dto.sessionId, "order.statusChanged", {
-      orderId: dto._id,
-      status: "cancelled",
-      rev: dto.rev,
-      reason: order.cancelReason || "",
+      ...statusChange(dto, payload.station),
+      reason: payload.reason || "",
     });
     return { order: dto };
   } catch (error) {

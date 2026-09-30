@@ -3,7 +3,9 @@ import { asyncRoute } from "../../shared/asyncRoute.js";
 import { checkId, requireAuth, requireRole, requireTenant } from "../staff/auth.middleware.js";
 import {
   getOrdersByDate,
+  getSalesByCategory,
   getSalesByMenuItem,
+  getSummary,
   getTopCustomers,
   getTotalSales,
   getUserOrders,
@@ -20,6 +22,14 @@ const send = (res, result) => {
 
 statisticsRouter.get("/sales", asyncRoute(async (req, res) => {
   send(res, await getTotalSales(req.tenant.restaurantId, req.query));
+}));
+
+statisticsRouter.get("/summary", asyncRoute(async (req, res) => {
+  send(res, await getSummary(req.tenant.restaurantId, req.query));
+}));
+
+statisticsRouter.get("/sales/categories", asyncRoute(async (req, res) => {
+  send(res, await getSalesByCategory(req.tenant.restaurantId, req.query));
 }));
 
 statisticsRouter.get("/sales/menu-items", asyncRoute(async (req, res) => {
