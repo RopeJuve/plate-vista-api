@@ -86,6 +86,18 @@ app.get("/health", async (_req, res) => {
   }
 });
 
+// Vercel imports this file without running server.js, so nothing has opened
+// the connection on a cold instance. Without this, queries sit in Mongoose's
+// buffer until the function times out.
+app.use("/api", async (_req, _res, next) => {
+  try {
+    await connectToDatabase();
+    next();
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/v1/ws-ticket", requireAuth, (req, res) => {
   res.status(200).json({ ticket: generateWsTicket(req.user), expiresIn: 60 });
 });
