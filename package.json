@@ -14,7 +14,10 @@
     "seed:sample-menu": "node scripts/seed-sample-menu.js",
     "vercel-build": "echo hello",
     "test": "node --test --test-concurrency=1 --experimental-test-isolation=process \"test/unit/*.test.js\" \"test/ordering/*.test.js\"",
-    "test:integration": "node --test --test-concurrency=1 --experimental-test-isolation=process \"test/integration/*.test.js\""
+    "test:integration": "node --test --test-concurrency=1 --experimental-test-isolation=process \"test/integration/*.test.js\"",
+    "afk": "tsx .sandcastle/afk.mts",
+    "afk:plan": "tsx .sandcastle/afk.mts --dry-run",
+    "afk:image": "sandcastle docker build-image --image-name sandcastle:agent"
   },
   "keywords": [],
   "author": "",
@@ -35,13 +38,15 @@
     "passport-local": "^1.0.0",
     "pino": "^10.3.1",
     "uuid": "^14.0.2",
-    "ws": "^8.18.0",
-    "zod": "^4.6.5"
+    "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@ai-hero/sandcastle": "^0.13.0",
     "dotenv": "^16.4.5",
     "mongodb-memory-server": "^11.2.0",
     "nodemon": "^3.1.4",
-    "supertest": "^7.2.2"
+    "supertest": "^7.2.2",
+    "tsx": "^4.23.15",
+    "zod": "^4.6.7"
   }
 }
