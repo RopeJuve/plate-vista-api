@@ -261,7 +261,7 @@ async function work(issue: Issue): Promise<Outcome> {
 
     // 5. push + PR (host side — agent never gets a GitHub token)
     cmd("git", ["push", "--force-with-lease", "-u", "origin", branch]);
-    const existing = gh(["pr", "list", "--head", branch, "--json", "url", "--jq", ".[0].url"]);
+    const existing = gh(["pr", "list", "--head", branch, "--json", "url", "--jq", ".[0].url // empty"]);
     const url =
       existing ||
       gh([
