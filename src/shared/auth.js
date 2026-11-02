@@ -59,7 +59,8 @@ export const sanitizedUser = (user) => {
 
 export const sanitizedUsers = (users) => users.map((user) => sanitizedUser(user));
 
-export const parsePagination = (query) => {
+export const parsePagination = (query = {}) => {
+  query ??= {};
   const page = Math.max(Number.parseInt(query.page, 10) || 1, 1);
   const limit = Math.min(Math.max(Number.parseInt(query.limit, 10) || 20, 1), 100);
   return { page, limit, skip: (page - 1) * limit };
