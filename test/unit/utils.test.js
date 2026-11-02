@@ -90,3 +90,11 @@ test("parsePagination computes skip from page/limit", () => {
     skip: 20,
   });
 });
+
+test("parsePagination returns defaults when called without a query", () => {
+  assert.deepEqual(parsePagination(), { page: 1, limit: 20, skip: 0 });
+});
+
+test("parsePagination returns defaults when query is null", () => {
+  assert.deepEqual(parsePagination(null), { page: 1, limit: 20, skip: 0 });
+});
