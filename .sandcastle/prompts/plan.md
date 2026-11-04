@@ -14,7 +14,7 @@ You are the PLANNER for an autonomous overnight coding run. You do NOT write cod
 
 !`git ls-files | head -400`
 
-Read `CLAUDE.md`, `AGENTS.md`, `CONTEXT.md` and `README.md` if they exist, and skim the code areas each issue touches.
+Read `CLAUDE.md`, `AGENTS.md`, `GLOSSARY.md` and `README.md` if they exist, and skim the code areas each issue touches.
 
 # Rules for selecting
 
