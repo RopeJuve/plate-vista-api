@@ -8,7 +8,7 @@ Issues are tracked in GitHub Issues on `RopeJuve/plate-vista-api`. See `docs/age
 
 ### Triage labels
 
-Default canonical labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+Canonical labels, except the `ready-for-human` role uses `needs-human`: `needs-triage`, `needs-info`, `ready-for-agent`, `needs-human`, `wontfix`. See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 
