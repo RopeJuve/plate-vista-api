@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { isValidKey } from "../shared/crypto.js";
+
+export const FISKALY_DEFAULT_BASE_URL = "https://kassensichv-middleware.fiskaly.com/api/v2";
 
 const emptyToUndefined = (value) =>
   value == null || value === "" ? undefined : value;
@@ -17,8 +20,27 @@ const schema = z
     SENTRY_DSN: z.string().optional(),
     TRUST_PROXY: z.coerce.number().int().min(0).optional(),
     ALLOW_LEGACY_WS_TOKEN: z.enum(["true", "false"]).default("true"),
+    FISKALY_API_KEY: z.string().optional(),
+    FISKALY_API_SECRET: z.string().optional(),
+    FISKALY_BASE_URL: z.string().url().default(FISKALY_DEFAULT_BASE_URL),
+    ENCRYPTION_KEY: z
+      .string()
+      .refine(isValidKey, "ENCRYPTION_KEY must be base64 that decodes to 32 bytes")
+      .optional(),
+    ENABLE_JOBS: z.enum(["true", "false"]).default("false"),
   })
   .superRefine((value, ctx) => {
+    if (value.NODE_ENV === "production") {
+      for (const name of ["FISKALY_API_KEY", "FISKALY_API_SECRET", "ENCRYPTION_KEY"]) {
+        if (!value[name]) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [name],
+            message: `${name} is required when NODE_ENV=production`,
+          });
+        }
+      }
+    }
     if (value.DEPLOY_TARGET !== "local" && !value.CORS_ORIGIN) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -65,6 +87,11 @@ export const loadEnv = (source = process.env) => {
     SENTRY_DSN: emptyToUndefined(source.SENTRY_DSN),
     TRUST_PROXY: emptyToUndefined(source.TRUST_PROXY),
     ALLOW_LEGACY_WS_TOKEN: emptyToUndefined(source.ALLOW_LEGACY_WS_TOKEN),
+    FISKALY_API_KEY: emptyToUndefined(source.FISKALY_API_KEY),
+    FISKALY_API_SECRET: emptyToUndefined(source.FISKALY_API_SECRET),
+    FISKALY_BASE_URL: emptyToUndefined(source.FISKALY_BASE_URL),
+    ENCRYPTION_KEY: emptyToUndefined(source.ENCRYPTION_KEY),
+    ENABLE_JOBS: emptyToUndefined(source.ENABLE_JOBS),
   };
   const parsed = schema.safeParse(normalized);
   if (!parsed.success) {
