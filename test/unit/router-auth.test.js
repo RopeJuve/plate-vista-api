@@ -22,6 +22,7 @@ import statisticsRouter from "../../src/modules/stats/stats.routes.js";
 import sessionRouter from "../../src/modules/ordering/session.routes.js";
 import staffRouter from "../../src/modules/staff/staff.routes.js";
 import internalRouter from "../../src/modules/internal/internal.routes.js";
+import restaurantRouter from "../../src/modules/restaurants/restaurant.routes.js";
 
 const PLACEHOLDER_ID = "507f1f77bcf86cd799439011";
 
@@ -53,6 +54,7 @@ const ROUTERS = {
   sessions: sessionRouter,
   staff: staffRouter,
   internal: internalRouter,
+  restaurant: restaurantRouter,
   r: publicMenuRouter,
 };
 

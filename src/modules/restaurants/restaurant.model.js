@@ -9,6 +9,19 @@ const restaurantSchema = new Schema(
       currency: { type: String, default: "EUR" },
       timezone: { type: String, default: "Europe/Berlin" },
     },
+    // The seller's details a German receipt must show and TSE activation needs.
+    // Optional here; legal.js decides when they are complete.
+    legal: {
+      legalName: { type: String, trim: true },
+      address: {
+        street: { type: String, trim: true },
+        zip: { type: String, trim: true },
+        city: { type: String, trim: true },
+        country: { type: String, default: "DE" },
+      },
+      taxNumber: { type: String, trim: true },
+      vatId: { type: String, trim: true },
+    },
   },
   { timestamps: true }
 );

@@ -35,6 +35,7 @@ import User from "../../src/modules/staff/user.model.js";
 import Restaurant from "../../src/modules/restaurants/restaurant.model.js";
 import Category from "../../src/modules/categories/category.model.js";
 import { registerRestaurant } from "../../src/modules/staff/staff.service.js";
+import { hasCompleteLegalDetails } from "../../src/modules/restaurants/legal.js";
 
 let replset;
 let app;
@@ -1337,6 +1338,76 @@ test("owners manage categories: unique names, station, order, and delete only wh
   assert.deepEqual(await names(), ["food"]);
 });
 
+test("owners and admins read and save the restaurant's legal details; other staff cannot", async () => {
+  const place = await fixture();
+  const owner = await Employee.create({
+    restaurantId: place.restaurant._id,
+    employee: `owner-${randomUUID().slice(0, 8)}`,
+    email: `owner-${randomUUID().slice(0, 8)}@example.com`,
+    password: passwordHash,
+    position: "owner",
+    role: "owner",
+  });
+  const asWho = (who) => (method) =>
+    request(app)[method]("/api/v1/restaurant/legal").set("Authorization", `Bearer ${generateToken(who)}`);
+  const asOwner = asWho(owner);
+  const asAdmin = asWho(place.employee);
+
+  const empty = await asOwner("get");
+  assert.equal(empty.status, 200);
+  assert.deepEqual(empty.body, {
+    legalName: null,
+    address: { street: null, zip: null, city: null, country: "DE" },
+    taxNumber: null,
+    vatId: null,
+  });
+  assert.equal(hasCompleteLegalDetails(await Restaurant.findById(place.restaurant._id)), false);
+
+  const details = {
+    legalName: "Pizzeria Roma GmbH",
+    address: { street: "Hauptstraße 1", zip: "10115", city: "Berlin", country: "DE" },
+    taxNumber: "27/123/45678",
+  };
+  const saved = await asOwner("put").send(details);
+  assert.equal(saved.status, 200);
+  assert.deepEqual(saved.body, { ...details, vatId: null });
+  assert.deepEqual((await asAdmin("get")).body, { ...details, vatId: null });
+  assert.equal(hasCompleteLegalDetails(await Restaurant.findById(place.restaurant._id)), true);
+
+  const byAdmin = await asAdmin("put").send({ ...details, taxNumber: undefined, vatId: "DE123456789" });
+  assert.equal(byAdmin.status, 200);
+  assert.equal(byAdmin.body.taxNumber, null);
+  assert.equal(byAdmin.body.vatId, "DE123456789");
+
+  const noTaxIds = await asOwner("put").send({ ...details, taxNumber: "" });
+  assert.equal(noTaxIds.status, 400);
+  assert.equal(noTaxIds.body.code, "VALIDATION");
+  assert.ok(noTaxIds.body.details.fields.taxNumber);
+  const badAddress = await asOwner("put").send({
+    ...details,
+    legalName: "",
+    address: { street: "", zip: "1011", city: "" },
+  });
+  assert.equal(badAddress.status, 400);
+  for (const field of ["legalName", "address.street", "address.zip", "address.city"]) {
+    assert.ok(badAddress.body.details.fields[field], field);
+  }
+  assert.equal((await asOwner("get")).body.vatId, "DE123456789");
+
+  for (const position of ["waiter", "kitchen", "staff"]) {
+    const staff = await Employee.create({
+      restaurantId: place.restaurant._id,
+      employee: `${position}-${randomUUID().slice(0, 8)}`,
+      email: `${position}-${randomUUID().slice(0, 8)}@example.com`,
+      password: passwordHash,
+      position,
+      role: position,
+    });
+    assert.equal((await asWho(staff)("get")).status, 403, position);
+    assert.equal((await asWho(staff)("put").send(details)).status, 403, position);
+  }
+});
+
 test("orders go to the station of the item's category; a change affects new orders only", async () => {
   const place = await fixture();
   const beerCategory = await categoryIn(place.restaurant._id, "Beer", "bar");
@@ -2069,6 +2140,8 @@ const AUTHENTICATED_ROUTES = [
   "GET /api/v1/statistics/customers/top",
   "GET /api/v1/statistics/:id/orders",
   "GET /api/v1/staff/board",
+  "GET /api/v1/restaurant/legal",
+  "PUT /api/v1/restaurant/legal",
 ];
 
 const joinPath = (prefix, path) => {
@@ -2272,6 +2345,26 @@ test("cross-tenant lists, creates, stats, public menu, and sockets stay inside r
     cover(method.toUpperCase(), pattern.split(" ")[1]);
     assert.equal(res.status, 404, pattern);
   }
+  // Legal details: A only ever reads and writes its own restaurant's.
+  await Restaurant.updateOne(
+    { _id: b.restaurant._id },
+    { $set: { "legal.legalName": `B Legal ${tag}`, "legal.taxNumber": "11/111/11111" } }
+  );
+  const aLegal = await asA("get", "/api/v1/restaurant/legal");
+  cover("GET", "/api/v1/restaurant/legal");
+  assert.equal(aLegal.status, 200);
+  assert.equal(JSON.stringify(aLegal.body).includes(`B Legal ${tag}`), false);
+  const aLegalSaved = await asA("put", "/api/v1/restaurant/legal").send({
+    restaurantId: String(b.restaurant._id),
+    legalName: `A Legal ${tag}`,
+    address: { street: "Weg 2", zip: "20095", city: "Hamburg" },
+    vatId: "DE999999999",
+  });
+  cover("PUT", "/api/v1/restaurant/legal");
+  assert.equal(aLegalSaved.status, 200);
+  const bLegalNow = await Restaurant.findById(b.restaurant._id).lean();
+  assert.equal(bLegalNow.legal.legalName, `B Legal ${tag}`);
+  assert.equal(bLegalNow.legal.vatId ?? null, null);
   const bCategoryNow = await Category.findOne({ _id: bCategory._id, restaurantId: b.restaurant._id });
   assert.equal(bCategoryNow.name, `B-only ${tag}`);
   const intoB = await asA("post", "/api/v1/menu-items").send({
