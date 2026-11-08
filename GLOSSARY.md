@@ -25,7 +25,7 @@ Something a guest can order, with a price, an optional description, and an optio
 _Avoid_: Product, dish (a menu item may be a drink)
 
 **Category**:
-A named section of a restaurant's menu, with its own station, shown to guests in the restaurant's chosen order; every menu item is in exactly one. Its name is unique within the restaurant, ignoring case.
+A named section of a restaurant's menu, with its own station and VAT rate, shown to guests in the restaurant's chosen order; every menu item is in exactly one. Its name is unique within the restaurant, ignoring case.
 _Avoid_: Menu section, type
 
 **Default Categories**:
@@ -51,12 +51,24 @@ _Avoid_: Order, sub-order
 ### Paying
 
 **Bill**:
-Everything a table orders during one visit, from its first order until staff close the table; its total leaves out cancelled tickets. Guests pay for the bill, not for each order.
+Everything a table orders during one visit, from its first order until staff close the table; its total leaves out cancelled tickets. Guests pay for the bill, not for each order, and once paid it takes no more orders or cancellations.
 _Avoid_: Check, tab, order (an order is one round on the bill)
 
 **Payment**:
 Settling a bill, in cash, by card at the restaurant's terminal, or online; recorded by staff, or by the payment provider for online payments, never by the guest's device.
 _Avoid_: Checkout (in product language), transaction (a transaction is the till's record)
+
+**Receipt**:
+The guest's record of a payment: what was bought, VAT per rate, total, payment method, and the TSE signature. Guests open it by link or QR code, without signing in.
+_Avoid_: Invoice, Beleg (in English copy), bill
+
+**TSE**:
+The certified signing device German law requires for a till, rented from fiskaly; every order and every payment is signed by the restaurant's TSE.
+_Avoid_: Fiscal printer, Kasse
+
+**VAT Rate**:
+The tax rate a menu item is sold at, taken from its category: 19 % (normal) or 7 % (reduced, e.g. food eaten in).
+_Avoid_: Tax class, MwSt (in English copy)
 
 ### Demo data
 
