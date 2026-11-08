@@ -48,6 +48,16 @@ _Avoid_: Ticket (a ticket is one station's part of an order), round
 The part of an order that one station works, with its own progress. An order has one ticket for each station it has items for, so drinks can be served while the food is still cooking.
 _Avoid_: Order, sub-order
 
+### Paying
+
+**Bill**:
+Everything a table orders during one visit, from its first order until staff close the table; its total leaves out cancelled tickets. Guests pay for the bill, not for each order.
+_Avoid_: Check, tab, order (an order is one round on the bill)
+
+**Payment**:
+Settling a bill, in cash, by card at the restaurant's terminal, or online; recorded by staff, or by the payment provider for online payments, never by the guest's device.
+_Avoid_: Checkout (in product language), transaction (a transaction is the till's record)
+
 ### Demo data
 
 **Sample Menu**:
