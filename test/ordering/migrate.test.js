@@ -204,6 +204,32 @@ test("category migration gives every restaurant the defaults and links items to 
   assert.equal(migrated.image, null);
 });
 
+test("category VAT migration sets the rate from the station, once, and writes nothing on a dry run", async () => {
+  const { migrateCategoryVat } = await import("../../src/db/migrateCategoryVat.js");
+  const categories = mongoose.connection.db.collection("categories");
+  const restaurantId = new mongoose.Types.ObjectId();
+  await categories.insertMany([
+    { restaurantId, name: "VAT Drinks", station: "bar", position: 1 },
+    { restaurantId, name: "VAT Food", station: "kitchen", position: 2 },
+    { restaurantId, name: "VAT Takeaway", station: "bar", position: 3, vatRate: "REDUCED_1" },
+  ]);
+  const rateOf = async (name) => (await categories.findOne({ restaurantId, name })).vatRate;
+
+  const dry = await migrateCategoryVat({ dryRun: true });
+  assert.ok(dry.updated >= 2);
+  assert.equal(await rateOf("VAT Drinks"), undefined);
+  assert.equal(await rateOf("VAT Food"), undefined);
+
+  const first = await migrateCategoryVat();
+  assert.equal(first.updated, dry.updated);
+  assert.equal(await rateOf("VAT Drinks"), "NORMAL");
+  assert.equal(await rateOf("VAT Food"), "REDUCED_1");
+  assert.equal(await rateOf("VAT Takeaway"), "REDUCED_1");
+
+  const second = await migrateCategoryVat();
+  assert.equal(second.updated, 0);
+});
+
 test("ticket migration gives old orders a ticket per station at the order's status", async () => {
   const { migrateTickets } = await import("../../src/db/migrateTickets.js");
   const orders = mongoose.connection.db.collection("orders");

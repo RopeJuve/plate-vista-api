@@ -28,6 +28,7 @@ export const serializeOrder = (order) => {
       lineTotalCents: item.lineTotalCents,
       notes: item.notes || "",
       station: item.station || "kitchen",
+      vatRate: item.vatRate ?? null,
     })),
     totalCents: source.totalCents,
     createdAt: iso(source.createdAt),

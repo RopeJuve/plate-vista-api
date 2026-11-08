@@ -2,6 +2,9 @@ import { Schema, model } from "mongoose";
 import { tenantPlugin } from "../../shared/tenantPlugin.js";
 
 export const STATIONS = ["kitchen", "bar"];
+// 19 % and 7 % (docs/adr/0004-vat-rate-belongs-to-category.md).
+export const VAT_RATES = ["NORMAL", "REDUCED_1"];
+export const defaultVatRate = (station) => (station === "bar" ? "NORMAL" : "REDUCED_1");
 export const CATEGORY_NAME_COLLATION = { locale: "en", strength: 2 };
 
 // A section of one restaurant's menu. Its station decides where every item in
@@ -16,6 +19,16 @@ const categorySchema = new Schema(
     },
     name: { type: String, required: true, trim: true, maxlength: 40 },
     station: { type: String, enum: STATIONS, required: true },
+    // Every item in the category is sold at this rate; without one, a new
+    // category takes its station's usual rate.
+    vatRate: {
+      type: String,
+      enum: VAT_RATES,
+      required: true,
+      default() {
+        return defaultVatRate(this.station);
+      },
+    },
     // Menu order; lower comes first.
     position: { type: Number, required: true },
   },
