@@ -1,10 +1,16 @@
-# WebSocket protocol v2.2
+# WebSocket protocol v2.3
 
 Orders change only through this socket. REST reads the current board; it does not create or edit orders.
 
-This release is **2.2**. Clients connect with `/ws?v=2`. A missing `v` defaults to `2`. An unknown version is closed with code `4000` and reason `unsupported protocol version`.
+This release is **2.3**. Clients connect with `/ws?v=2`. A missing `v` defaults to `2`. An unknown version is closed with code `4000` and reason `unsupported protocol version`.
 
 ## Changelog
+
+### 2.3
+
+- Paying a bill (see [`docs/payments-contract.md`](../../docs/payments-contract.md)). New events to the staff room and the session's room: `bill.paid` and `payment.signed`. New event to the staff room only: `payment.signFailed`.
+- Bill lock: `order.create`, `order.update`, and a ticket cancel on a paid bill fail with the new error `BILL_PAID`.
+- Order lines carry `vatRate` (`NORMAL` = 19 %, `REDUCED_1` = 7 %), copied from the category when the order is placed.
 
 ### 2.2
 
@@ -87,7 +93,8 @@ Dates are ISO-8601 strings. Money is integer cents. No Mongoose internals (`__v`
     "quantity": 2,
     "lineTotalCents": 900,
     "notes": "string",
-    "station": "kitchen|bar"
+    "station": "kitchen|bar",
+    "vatRate": "NORMAL|REDUCED_1"
   }],
   "totalCents": 900,
   "createdAt": "ISO-8601",
@@ -140,8 +147,10 @@ Staff snapshot of open sessions and their non-cancelled orders. Order objects ar
 Staff can read any session of their restaurant. A guest can read only the session in their table token. Works for open and closed sessions. Cancelled orders are excluded.
 
 ```jsonc
-{ "sessionId": "string", "session": {/* Session */}, "orders": [/* Order */], "totalCents": 1800 }
+{ "sessionId": "string", "session": {/* Session */}, "orders": [/* Order */], "totalCents": 1800, "payment": {/* Payment */} }
 ```
+
+`payment` (2.3) is `null` until the bill is paid. The `Payment` shape is in [`docs/payments-contract.md`](../../docs/payments-contract.md).
 
 An order that races a session close is rejected with `SESSION_CLOSED`; it never lands in a closed session.
 
@@ -186,7 +195,9 @@ Exactly one ack per message, carrying the same `requestId`:
 { "type": "ack", "requestId": "uuid", "ok": false, "error": { "code": "OUT_OF_STOCK", "message": "..." } }
 ```
 
-Error codes: `VALIDATION`, `NOT_FOUND`, `OUT_OF_STOCK`, `FORBIDDEN`, `INVALID_TRANSITION`, `SESSION_CLOSED`, `RATE_LIMITED`, `INTERNAL`.
+Error codes: `VALIDATION`, `NOT_FOUND`, `OUT_OF_STOCK`, `FORBIDDEN`, `INVALID_TRANSITION`, `SESSION_CLOSED`, `BILL_PAID`, `RATE_LIMITED`, `INTERNAL`.
+
+`BILL_PAID` (2.3): the session's bill is paid, so it takes no more orders or cancellations. `order.create`, `order.update`, and `order.cancel` of a ticket on that bill fail with it.
 
 `details` is optional:
 
@@ -208,7 +219,12 @@ An unknown `type` is `VALIDATION`. The 11th message within 10 seconds is `RATE_L
 { "type": "event", "event": "order.statusChanged", "data": { "orderId": "...", "status": "pending", "rev": 2, "tickets": [], "totalCents": 1800, "station": "bar" } }
 { "type": "event", "event": "session.closed", "data": { "sessionId": "...", "tableId": "..." } }
 { "type": "event", "event": "menu.updated", "data": { "_id": "...", "title": "...", "priceCents": 450, "inStock": true, "category": "food", "archived": false } }
+{ "type": "event", "event": "bill.paid", "data": { "sessionId": "...", "paymentId": "...", "receiptToken": "...", "method": "CASH|CARD_TERMINAL|ONLINE", "totalCents": 1800 } }
+{ "type": "event", "event": "payment.signed", "data": { "paymentId": "...", "receiptToken": "..." } }
+{ "type": "event", "event": "payment.signFailed", "data": { "paymentId": "..." } }
 ```
+
+`bill.paid` (2.3) is sent when staff record a payment; the bill takes no more orders or cancellations after it. `payment.signed` (2.3) is sent when the TSE has signed that payment, so the receipt at `GET /api/v1/receipts/:receiptToken` now shows the signature. Both go to the staff room and the session's room. `payment.signFailed` (2.3) goes to the staff room only, when signing the payment failed; owners and admins can retry it through `/api/v1/tse/failed`. Payloads and the REST side are in [`docs/payments-contract.md`](../../docs/payments-contract.md).
 
 `session.paid` is reserved for a later Stripe flow and is not emitted yet.
 
