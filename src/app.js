@@ -22,6 +22,7 @@ import sessionRouter from "./modules/ordering/session.routes.js";
 import tableRouter from "./modules/tables/table.routes.js";
 import statisticsRouter from "./modules/stats/stats.routes.js";
 import internalRouter from "./modules/internal/internal.routes.js";
+import restaurantRouter from "./modules/restaurants/restaurant.routes.js";
 
 void initSentry();
 
@@ -113,6 +114,7 @@ app.use("/api/v1/sessions", sessionRouter);
 app.use("/api/v1/table", tableRouter);
 app.use("/api/v1/statistics", statisticsRouter);
 app.use("/api/v1/staff", staffRouter);
+app.use("/api/v1/restaurant", restaurantRouter);
 app.use("/internal", internalRouter);
 
 app.use((_req, res) => {
