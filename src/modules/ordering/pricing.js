@@ -45,7 +45,7 @@ export const priceItems = async (restaurantId, items, mongoSession) => {
       productIds: outOfStock.map((item) => String(item.productId)),
     });
   }
-  // Each line keeps the station and category name it was ordered with, so a
+  // Each line keeps the station, category name, and VAT rate it was ordered with, so a
   // later change to the category never moves an open ticket.
   const categories = await Category.find({
     _id: { $in: products.map((product) => product.categoryId) },
@@ -69,6 +69,7 @@ export const priceItems = async (restaurantId, items, mongoSession) => {
       status: "pending",
       station: categoryOf.get(String(product.categoryId))?.station || "kitchen",
       category: categoryOf.get(String(product.categoryId))?.name,
+      vatRate: categoryOf.get(String(product.categoryId))?.vatRate,
     };
   });
 

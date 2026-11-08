@@ -7,7 +7,7 @@ import { categoriesById, findCategory } from "../categories/category.service.js"
 
 const toCents = (price) => currency(price).intValue;
 
-// Name and station come from the item's category; the station is never the
+// Name, station, and VAT rate come from the item's category; the station is never the
 // item's own (docs/adr/0001-station-belongs-to-category.md).
 const categoryFields = (source, categories) => {
   const category = categories.get(String(source.categoryId));
@@ -15,6 +15,7 @@ const categoryFields = (source, categories) => {
     categoryId: source.categoryId ? String(source.categoryId) : null,
     category: category?.name ?? null,
     station: category?.station ?? "kitchen",
+    vatRate: category?.vatRate ?? null,
   };
 };
 

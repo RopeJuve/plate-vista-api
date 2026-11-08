@@ -1,7 +1,7 @@
 import { Schema, model } from "mongoose";
 import { tenantPlugin } from "../../shared/tenantPlugin.js";
 import { ORDER_STATUSES } from "./order.transitions.js";
-import { STATIONS } from "../categories/category.model.js";
+import { STATIONS, VAT_RATES } from "../categories/category.model.js";
 
 const lineItemSchema = new Schema(
   {
@@ -16,6 +16,15 @@ const lineItemSchema = new Schema(
     // Copied from the menu item like title and price, so stats keep the
     // category the dish had when it was sold.
     category: { type: String },
+    // Copied from the category when the order is placed; orders placed before
+    // categories had a rate have none.
+    vatRate: {
+      type: String,
+      enum: VAT_RATES,
+      required() {
+        return this.ownerDocument().isNew;
+      },
+    },
   },
   { _id: false }
 );

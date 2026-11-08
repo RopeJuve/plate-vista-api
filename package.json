@@ -11,6 +11,7 @@
     "migrate": "node scripts/migrate-tenants.js",
     "migrate:staff-logins": "node scripts/migrate-staff-logins.js",
     "migrate:categories": "node scripts/migrate-categories.js",
+    "migrate:category-vat": "node scripts/migrate-category-vat.js",
     "migrate:tickets": "node scripts/migrate-tickets.js",
     "seed:sample-menu": "node scripts/seed-sample-menu.js",
     "vercel-build": "echo hello",

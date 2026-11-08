@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 import { z } from "zod";
-import Category, { CATEGORY_NAME_COLLATION, STATIONS } from "./category.model.js";
+import Category, { CATEGORY_NAME_COLLATION, STATIONS, VAT_RATES } from "./category.model.js";
 import MenuItem from "../menu/menuItem.model.js";
 import { DEFAULT_CATEGORIES } from "./defaultCategories.js";
 import { AppError, isDuplicateKey } from "../../shared/errors.js";
@@ -13,14 +13,17 @@ const name = z
   .max(40, "Name must be at most 40 characters");
 const station = z.enum(STATIONS, { error: "Station must be kitchen or bar" });
 
-const createSchema = z.object({ name, station });
-const updateSchema = z.object({ name, station }).partial();
+const vatRate = z.enum(VAT_RATES, { error: "VAT rate must be NORMAL or REDUCED_1" });
+
+const createSchema = z.object({ name, station, vatRate: vatRate.optional() });
+const updateSchema = z.object({ name, station, vatRate }).partial();
 const moveSchema = z.object({ direction: z.enum(["up", "down"], { error: "Direction must be up or down" }) });
 
 export const serializeCategory = (category) => ({
   _id: String(category._id),
   name: category.name,
   station: category.station,
+  vatRate: category.vatRate,
   position: category.position,
 });
 

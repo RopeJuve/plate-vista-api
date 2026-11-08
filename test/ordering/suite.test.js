@@ -1369,6 +1369,90 @@ test("orders go to the station of the item's category; a change affects new orde
   assert.equal(firstNow.items[0].station, "bar");
 });
 
+test("a category's VAT rate defaults from its station and only accepts known rates", async () => {
+  const place = await fixture();
+  const as = (method, url) =>
+    request(app)[method](`/api/v1/categories${url}`).set("Authorization", `Bearer ${place.token}`);
+
+  const shots = await as("post", "").send({ name: "Shots", station: "bar" });
+  assert.equal(shots.status, 201);
+  assert.equal(shots.body.vatRate, "NORMAL");
+  const mains = await as("post", "").send({ name: "Mains", station: "kitchen" });
+  assert.equal(mains.body.vatRate, "REDUCED_1");
+  const takeaway = await as("post", "").send({ name: "Takeaway Drinks", station: "bar", vatRate: "REDUCED_1" });
+  assert.equal(takeaway.status, 201);
+  assert.equal(takeaway.body.vatRate, "REDUCED_1");
+
+  const bad = await as("post", "").send({ name: "Wrong", station: "bar", vatRate: "FOO" });
+  assert.equal(bad.status, 400);
+  assert.equal(bad.body.code, "VALIDATION");
+  const badUpdate = await as("put", `/${shots.body._id}`).send({ vatRate: "FOO" });
+  assert.equal(badUpdate.status, 400);
+  assert.equal(badUpdate.body.code, "VALIDATION");
+
+  const changed = await as("put", `/${shots.body._id}`).send({ vatRate: "REDUCED_1" });
+  assert.equal(changed.status, 200);
+  assert.equal(changed.body.vatRate, "REDUCED_1");
+  const listed = (await as("get", "")).body;
+  assert.equal(listed.find((category) => category.name === "Shots").vatRate, "REDUCED_1");
+  assert.equal(listed.find((category) => category.name === "food").vatRate, "REDUCED_1");
+});
+
+test("order lines copy the category's VAT rate; a later change affects new orders only", async () => {
+  const place = await fixture();
+  const beerCategory = await categoryIn(place.restaurant._id, "Beer", "bar");
+  assert.equal(beerCategory.vatRate, "NORMAL");
+  const beer = await MenuItem.create({
+    restaurantId: place.restaurant._id,
+    title: "Pils",
+    price: 4,
+    priceCents: 400,
+    categoryId: beerCategory._id,
+  });
+  const order = async () =>
+    (
+      await createOrder(staffCtx(place), {
+        clientOrderId: randomUUID(),
+        tableId: String(place.table._id),
+        items: [...itemsOf(beer), ...itemsOf(place.item)],
+      })
+    ).order;
+  const rateOf = (placed, title) => placed.items.find((item) => item.title === title).vatRate;
+  const first = await order();
+  assert.equal(rateOf(first, "Pils"), "NORMAL");
+  assert.equal(rateOf(first, "Pizza"), "REDUCED_1");
+
+  const changed = await request(app)
+    .put(`/api/v1/categories/${beerCategory._id}`)
+    .set("Authorization", `Bearer ${place.token}`)
+    .send({ vatRate: "REDUCED_1" });
+  assert.equal(changed.status, 200);
+  const second = await order();
+  assert.equal(rateOf(second, "Pils"), "REDUCED_1");
+  const firstNow = await Order.findOne({ _id: first._id, restaurantId: place.restaurant._id });
+  assert.equal(firstNow.items.find((item) => item.title === "Pils").vatRate, "NORMAL");
+});
+
+test("an order saved before lines had a VAT rate still loads and serializes", async () => {
+  const place = await fixture();
+  const placed = (
+    await createOrder(staffCtx(place), {
+      clientOrderId: randomUUID(),
+      tableId: String(place.table._id),
+      items: itemsOf(place.item),
+    })
+  ).order;
+  await Order.collection.updateOne(
+    { _id: new mongoose.Types.ObjectId(placed._id) },
+    { $unset: { "items.$[].vatRate": "" } }
+  );
+  const read = await getOrder(place.restaurant._id, placed._id);
+  assert.equal(read.items[0].title, "Pizza");
+  assert.equal(read.items[0].vatRate, null);
+  const doc = await Order.findOne({ _id: placed._id, restaurantId: place.restaurant._id });
+  await doc.validate();
+});
+
 // A restaurant with a bar item next to the fixture's kitchen item.
 const withBeer = async () => {
   const place = await fixture();
