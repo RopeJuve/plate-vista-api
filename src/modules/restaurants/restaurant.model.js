@@ -22,6 +22,23 @@ const restaurantSchema = new Schema(
       taxNumber: { type: String, trim: true },
       vatId: { type: String, trim: true },
     },
+    // The restaurant's TSE at fiskaly. tse.service.js fills it in step by step
+    // (setupStep is the last step that finished) so a failed setup resumes.
+    // The admin PIN and PUK are encrypted (shared/crypto.js) and never selected
+    // unless asked for.
+    tse: {
+      tssId: { type: String },
+      clientId: { type: String },
+      tssSerial: { type: String },
+      clientSerial: { type: String },
+      adminPinEnc: { type: String, select: false },
+      adminPukEnc: { type: String, select: false },
+      setupStep: {
+        type: String,
+        enum: ["TSS_CREATED", "UNINITIALIZED", "PIN_SET", "INITIALIZED", "CLIENT_CREATED", "DONE"],
+      },
+      setupAt: { type: Date },
+    },
   },
   { timestamps: true }
 );

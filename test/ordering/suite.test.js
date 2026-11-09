@@ -2142,6 +2142,8 @@ const AUTHENTICATED_ROUTES = [
   "GET /api/v1/staff/board",
   "GET /api/v1/restaurant/legal",
   "PUT /api/v1/restaurant/legal",
+  "GET /api/v1/tse",
+  "POST /api/v1/tse/setup",
 ];
 
 const joinPath = (prefix, path) => {
@@ -2365,6 +2367,22 @@ test("cross-tenant lists, creates, stats, public menu, and sockets stay inside r
   const bLegalNow = await Restaurant.findById(b.restaurant._id).lean();
   assert.equal(bLegalNow.legal.legalName, `B Legal ${tag}`);
   assert.equal(bLegalNow.legal.vatId ?? null, null);
+  // TSE: A sees only its own (inactive) TSE and cannot set up B's.
+  await Restaurant.updateOne(
+    { _id: b.restaurant._id },
+    { $set: { tse: { tssId: `b-tss-${tag}`, tssSerial: `b-serial-${tag}`, clientId: `b-client-${tag}`, setupStep: "DONE", setupAt: new Date() } } }
+  );
+  const aTse = await asA("get", "/api/v1/tse");
+  cover("GET", "/api/v1/tse");
+  assert.equal(aTse.status, 200);
+  assert.deepEqual(aTse.body, { active: false, failedSignatures: 0 });
+  const aTseSetup = await asA("post", "/api/v1/tse/setup").send({ restaurantId: String(b.restaurant._id) });
+  cover("POST", "/api/v1/tse/setup");
+  // A's legal details are complete by now; this suite configures no fiskaly.
+  assert.equal(aTseSetup.status, 500);
+  assert.equal(aTseSetup.body.code, "INTERNAL");
+  assert.equal(JSON.stringify(aTseSetup.body).includes(tag), false);
+  assert.equal((await Restaurant.findById(b.restaurant._id).lean()).tse.tssSerial, `b-serial-${tag}`);
   const bCategoryNow = await Category.findOne({ _id: bCategory._id, restaurantId: b.restaurant._id });
   assert.equal(bCategoryNow.name, `B-only ${tag}`);
   const intoB = await asA("post", "/api/v1/menu-items").send({

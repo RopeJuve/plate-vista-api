@@ -23,6 +23,7 @@ import sessionRouter from "../../src/modules/ordering/session.routes.js";
 import staffRouter from "../../src/modules/staff/staff.routes.js";
 import internalRouter from "../../src/modules/internal/internal.routes.js";
 import restaurantRouter from "../../src/modules/restaurants/restaurant.routes.js";
+import tseRouter from "../../src/modules/tse/tse.routes.js";
 
 const PLACEHOLDER_ID = "507f1f77bcf86cd799439011";
 
@@ -55,6 +56,7 @@ const ROUTERS = {
   staff: staffRouter,
   internal: internalRouter,
   restaurant: restaurantRouter,
+  tse: tseRouter,
   r: publicMenuRouter,
 };
 
