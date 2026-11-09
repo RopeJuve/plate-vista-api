@@ -7,7 +7,15 @@ import { publish } from "../../realtime/events.js";
 import { priceItems } from "./pricing.js";
 import { stock } from "./stock.js";
 import { assertTransition } from "./order.transitions.js";
-import { buildTickets, orderStatusOf, stationOf, ticketFields, ticketsOf } from "./tickets.js";
+import {
+  buildTickets,
+  linesOnActiveTickets,
+  orderStatusOf,
+  stationOf,
+  ticketFields,
+  ticketsOf,
+} from "./tickets.js";
+import { defaultVatRate } from "../categories/vatRates.js";
 import {
   cancelOrderSchema,
   createOrderSchema,
@@ -19,7 +27,6 @@ import { findSession, openOrJoinSession, touchSession } from "./session.service.
 import { serializeOrder, serializeSession } from "./serialize.js";
 import Payment from "../payments/payment.model.js";
 import { serializePayment } from "../payments/serialize.js";
-import { defaultVatRate } from "../categories/category.model.js";
 
 export { serializeOrder };
 
@@ -468,11 +475,7 @@ export const cancelOrder = async (ctx, input) => {
 // Pass a Mongo session to read the bill inside a transaction.
 export const getSessionBill = async (ctx, sessionId, mongoSession) => {
   const session = await findSession(ctx.restaurantId, sessionId, mongoSession);
-  const ordersQuery = Order.find({
-    restaurantId: ctx.restaurantId,
-    sessionId,
-    status: { $ne: "cancelled" },
-  }).lean();
+  const ordersQuery = Order.findOnBill(ctx.restaurantId, sessionId).lean();
   const paymentQuery = Payment.findOne({ restaurantId: ctx.restaurantId, sessionId }).lean();
   if (mongoSession) {
     ordersQuery.session(mongoSession);
@@ -494,26 +497,19 @@ export const getSessionBill = async (ctx, sessionId, mongoSession) => {
 // of cancelled tickets. Lines from before categories had a VAT rate take
 // their station's usual rate, as the category migration did (ADR-0004).
 export const getBillLines = async (restaurantId, sessionId) => {
-  const orders = await Order.find({ restaurantId, sessionId, status: { $ne: "cancelled" } })
+  const orders = await Order.findOnBill(restaurantId, sessionId)
     .sort({ createdAt: 1, _id: 1 })
     .lean();
-  return orders.flatMap((order) => {
-    const active = new Set(
-      ticketsOf(order)
-        .filter((ticket) => ticket.status !== "cancelled")
-        .map((ticket) => ticket.station)
-    );
-    return order.items
-      .filter((line) => active.has(stationOf(line)))
-      .map((line) => ({
-        productId: String(line.productId),
-        title: line.title,
-        quantity: line.quantity,
-        unitPriceCents: line.unitPriceCents,
-        lineTotalCents: line.lineTotalCents,
-        vatRate: line.vatRate || defaultVatRate(stationOf(line)),
-      }));
-  });
+  return orders.flatMap((order) =>
+    linesOnActiveTickets(order.items, ticketsOf(order)).map((line) => ({
+      productId: String(line.productId),
+      title: line.title,
+      quantity: line.quantity,
+      unitPriceCents: line.unitPriceCents,
+      lineTotalCents: line.lineTotalCents,
+      vatRate: line.vatRate || defaultVatRate(stationOf(line)),
+    }))
+  );
 };
 
 export const getOrder = async (restaurantId, orderId) => {
