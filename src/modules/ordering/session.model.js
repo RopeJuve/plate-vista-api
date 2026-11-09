@@ -19,6 +19,9 @@ const sessionSchema = new Schema(
     closedAt: { type: Date },
     lastOrderAt: { type: Date },
     code: { type: String, required: true },
+    // Set when an owner or admin closed the table with its bill unpaid.
+    unpaidCloseReason: { type: String },
+    unpaidClosedBy: { type: Schema.Types.ObjectId, ref: "Employee" },
   },
   { timestamps: true }
 );

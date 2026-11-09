@@ -15,8 +15,10 @@ import {
   updateOrderSchema,
 } from "./order.schemas.js";
 import TableSession from "./session.model.js";
-import { findSession, openOrJoinSession } from "./session.service.js";
+import { findSession, openOrJoinSession, touchSession } from "./session.service.js";
 import { serializeOrder, serializeSession } from "./serialize.js";
+import Payment from "../payments/payment.model.js";
+import { serializePayment } from "../payments/serialize.js";
 
 export { serializeOrder };
 
@@ -105,6 +107,14 @@ const touchOpenSession = async (restaurantId, sessionId, mongoSession) => {
   }
 };
 
+// A paid bill takes no more orders or cancellations. Recording a payment writes
+// the session document, and so does every change checked here, so a change
+// racing a payment conflicts and its retry sees the payment.
+export const assertBillUnpaid = async (restaurantId, sessionId, mongoSession) => {
+  const paid = await Payment.exists({ restaurantId, sessionId }).session(mongoSession);
+  if (paid) throw new AppError("BILL_PAID", "This bill is paid");
+};
+
 const quantityMap = (items, key) => {
   const map = new Map();
   items.forEach((item) => {
@@ -162,6 +172,9 @@ export const createOrder = async (ctx, input) => {
           const resolved = await resolveSession(ctx, payload, mongoSession);
           const session = resolved.session;
           sessionId = String(session._id);
+          if (!resolved.opened) {
+            await assertBillUnpaid(ctx.restaurantId, session._id, mongoSession);
+          }
           if (resolved.opened) {
             openedMeta = { session, tableNumber: resolved.tableNumber };
           }
@@ -243,6 +256,7 @@ export const updateOrder = async (ctx, input) => {
       if (ctx.actor?.type === "guest") {
         await assertBoundGuestSession(ctx, mongoSession);
       }
+      await assertBillUnpaid(ctx.restaurantId, current.sessionId, mongoSession);
       // Once any station has started on its ticket the order is locked.
       const started = ticketsOf(current).find((ticket) => ticket.status !== "pending");
       if (started) {
@@ -376,6 +390,8 @@ export const cancelOrder = async (ctx, input) => {
         throw new AppError("NOT_FOUND", "Not found", 404);
       }
       const tickets = ticketsOf(current);
+      await assertBillUnpaid(ctx.restaurantId, current.sessionId, mongoSession);
+      await touchSession(ctx.restaurantId, current.sessionId, mongoSession);
       if (ctx.actor.type === "guest") {
         await assertBoundGuestSession(ctx, mongoSession);
         // A guest cancels the whole order, and only before any station started.
@@ -448,19 +464,28 @@ export const cancelOrder = async (ctx, input) => {
 };
 
 // Works for open and closed sessions, so a closed table's bill stays readable.
-export const getSessionBill = async (ctx, sessionId) => {
-  const session = await findSession(ctx.restaurantId, sessionId);
-  const orders = await Order.find({
+// Pass a Mongo session to read the bill inside a transaction.
+export const getSessionBill = async (ctx, sessionId, mongoSession) => {
+  const session = await findSession(ctx.restaurantId, sessionId, mongoSession);
+  const ordersQuery = Order.find({
     restaurantId: ctx.restaurantId,
     sessionId,
     status: { $ne: "cancelled" },
   }).lean();
+  const paymentQuery = Payment.findOne({ restaurantId: ctx.restaurantId, sessionId }).lean();
+  if (mongoSession) {
+    ordersQuery.session(mongoSession);
+    paymentQuery.session(mongoSession);
+  }
+  const orders = await ordersQuery;
+  const payment = await paymentQuery;
   const totalCents = orders.reduce((sum, order) => sum + order.totalCents, 0);
   return {
     sessionId: String(sessionId),
     session: serializeSession(session),
     orders: orders.map((order) => serializeOrder(order)),
     totalCents,
+    payment: serializePayment(payment),
   };
 };
 

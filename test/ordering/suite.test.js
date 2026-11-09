@@ -97,7 +97,7 @@ const waitForClose = async (client, code, timeout = 2000) => {
 const staffCtx = (fixture, requestId = randomUUID()) => ({
   restaurantId: fixture.restaurant._id,
   requestId,
-  actor: { type: "employee", id: fixture.employee._id },
+  actor: { type: "employee", id: fixture.employee._id, position: fixture.employee.position },
 });
 
 const guestCtx = (fixture, session, requestId = randomUUID()) => ({
@@ -489,7 +489,8 @@ test("a closed session's bill stays readable by staff and its own guest and show
     items: itemsOf(place.item, 2),
   });
   const sessionId = placed.order.sessionId;
-  await closeSession(staffCtx(place), sessionId);
+  // The bill is unpaid, so the admin closes it with a reason.
+  await closeSession(staffCtx(place), sessionId, { unpaidReason: "Left without paying" });
 
   const staffBill = await request(app)
     .get(`/api/v1/sessions/${sessionId}/bill`)
@@ -2126,6 +2127,7 @@ const AUTHENTICATED_ROUTES = [
   "DELETE /api/v1/orders/:id",
   "GET /api/v1/sessions/:id/bill",
   "POST /api/v1/sessions/:id/close",
+  "POST /api/v1/sessions/:id/payments",
   "GET /api/v1/table",
   "POST /api/v1/table",
   "GET /api/v1/table/:id",
@@ -2500,6 +2502,7 @@ test("cross-tenant lists, creates, stats, public menu, and sockets stay inside r
     ["get", `/api/v1/orders/${orderB.order._id}`, "GET /api/v1/orders/:id"],
     ["get", `/api/v1/sessions/${orderB.order.sessionId}/bill`, "GET /api/v1/sessions/:id/bill"],
     ["post", `/api/v1/sessions/${orderB.order.sessionId}/close`, "POST /api/v1/sessions/:id/close"],
+    ["post", `/api/v1/sessions/${orderB.order.sessionId}/payments`, "POST /api/v1/sessions/:id/payments"],
   ];
   for (const [method, url, pattern] of missing) {
     const res = await asA(method, url).send({ inStock: false, capacity: 2, position: "kitchen" });

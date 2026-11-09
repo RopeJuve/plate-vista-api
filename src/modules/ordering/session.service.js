@@ -3,6 +3,7 @@ import { customAlphabet } from "nanoid";
 import Table from "../tables/table.model.js";
 import Order from "./order.model.js";
 import TableSession from "./session.model.js";
+import Payment from "../payments/payment.model.js";
 import { AppError, duplicateKeyOn } from "../../shared/errors.js";
 import { publish } from "../../realtime/events.js";
 import { serializeOrder, serializeSession } from "./serialize.js";
@@ -80,7 +81,35 @@ export const assertOpenSession = async (restaurantId, sessionId) => {
   return session;
 };
 
-export const closeSession = async (ctx, sessionId) => {
+// Writes the session document so that transactions changing one bill (a
+// payment, a cancel, a close) conflict with each other and retry.
+export const touchSession = async (restaurantId, sessionId, mongoSession) => {
+  await TableSession.updateOne(
+    { _id: sessionId, restaurantId },
+    { $set: { updatedAt: new Date() } },
+    { timestamps: false }
+  ).session(mongoSession);
+};
+
+const canCloseUnpaid = (actor) =>
+  actor?.type === "employee" && ["owner", "admin"].includes(actor.position);
+
+const unpaidTotalCents = async (restaurantId, sessionId, mongoSession) => {
+  const paid = await Payment.exists({ restaurantId, sessionId }).session(mongoSession);
+  if (paid) return 0;
+  const orders = await Order.find({ restaurantId, sessionId, status: { $ne: "cancelled" } })
+    .select("totalCents")
+    .session(mongoSession)
+    .lean();
+  return orders.reduce((sum, order) => sum + order.totalCents, 0);
+};
+
+// A bill above 0 closes once it is paid; an owner or admin can close it unpaid
+// by giving a reason, which is kept on the session.
+export const closeSession = async (ctx, sessionId, { unpaidReason } = {}) => {
+  if (unpaidReason !== undefined && !canCloseUnpaid(ctx.actor)) {
+    throw new AppError("FORBIDDEN", "Only an owner or admin can close an unpaid bill", 403);
+  }
   const mongoSession = await mongoose.startSession();
   try {
     let closed;
@@ -94,6 +123,13 @@ export const closeSession = async (ctx, sessionId) => {
       if (session.status === "closed") {
         closed = session;
         return;
+      }
+      if ((await unpaidTotalCents(ctx.restaurantId, session._id, mongoSession)) > 0) {
+        if (unpaidReason === undefined) {
+          throw new AppError("BILL_UNPAID", "The bill is not paid yet");
+        }
+        session.unpaidCloseReason = unpaidReason;
+        session.unpaidClosedBy = ctx.actor.id;
       }
       session.status = "closed";
       session.closedAt = new Date();

@@ -4,6 +4,9 @@ import { AppError } from "../../shared/errors.js";
 import { checkId, requireAuth, requireRole, requireTenant } from "../staff/auth.middleware.js";
 import { closeSession } from "./session.service.js";
 import { getSessionBill } from "./order.service.js";
+import { recordPayment } from "../payments/payment.service.js";
+import { closeSessionSchema } from "../payments/payment.schemas.js";
+import { parseOrThrow } from "../../shared/validate.js";
 
 const sessionRouter = express.Router();
 
@@ -30,9 +33,14 @@ sessionRouter.post(
   requireTenant,
   checkId,
   asyncRoute(async (req, res) => {
+    const { unpaidReason } = parseOrThrow(closeSessionSchema, req.body || {});
     const session = await closeSession(
-      { restaurantId: req.tenant.restaurantId, actor: { type: "employee", id: req.user.id } },
-      req.params.id
+      {
+        restaurantId: req.tenant.restaurantId,
+        actor: { type: "employee", id: req.user.id, position: req.user.position },
+      },
+      req.params.id,
+      { unpaidReason }
     );
     res.status(200).json({
       id: session._id,
@@ -40,6 +48,27 @@ sessionRouter.post(
       tableId: session.tableId,
       closedAt: session.closedAt,
     });
+  })
+);
+
+// Any staff member records that the bill was paid at the table.
+sessionRouter.post(
+  "/:id/payments",
+  requireAuth,
+  requireRole("employee"),
+  requireTenant,
+  checkId,
+  asyncRoute(async (req, res) => {
+    const { payment, replayed } = await recordPayment(
+      {
+        restaurantId: req.tenant.restaurantId,
+        requestId: req.id,
+        actor: { type: "employee", id: req.user.id, position: req.user.position },
+      },
+      req.params.id,
+      req.body
+    );
+    res.status(replayed ? 200 : 201).json(payment);
   })
 );
 
