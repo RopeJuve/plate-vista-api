@@ -118,7 +118,7 @@ GET /receipts/:receiptToken -> 200 Receipt | 404
 ```ts
 Receipt = {
   restaurant: { name, legalName, address, taxNumber?, vatId? },
-  lines: [{ title, quantity, unitPriceCents, lineTotalCents, vatRate }],  // merged by item + unit price across the bill
+  lines: [{ title, quantity, unitPriceCents, lineTotalCents, vatRate }],  // merged by item + unit price + VAT rate across the bill (a rate change mid-visit gives two lines, each taxed right)
   totalsByVat: [{ vatRate, netCents, vatCents, grossCents }],
   totalCents,
   method,
