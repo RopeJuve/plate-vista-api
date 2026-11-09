@@ -25,6 +25,9 @@ const tseSchema = new Schema(
     lastError: { type: String },
     retryCount: { type: Number, default: 0 },
     nextAttemptAt: { type: Date },
+    // Set while one signer works on it, so the ping and the sweep never sign
+    // the same payment twice.
+    lockedUntil: { type: Date },
   },
   { _id: false }
 );
@@ -51,6 +54,8 @@ paymentSchema.index({ restaurantId: 1, sessionId: 1 }, { unique: true });
 paymentSchema.index({ receiptToken: 1 }, { unique: true });
 paymentSchema.index({ restaurantId: 1, clientPaymentId: 1 }, { unique: true });
 paymentSchema.index({ restaurantId: 1, "tse.status": 1 });
+// The signing sweep looks across restaurants (src/jobs/tseSweep.js).
+paymentSchema.index({ "tse.status": 1, "tse.nextAttemptAt": 1 });
 
 paymentSchema.plugin(tenantPlugin);
 

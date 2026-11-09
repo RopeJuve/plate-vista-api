@@ -92,7 +92,12 @@ const pay = (place, sessionId, body = {}, who) =>
     ...body,
   });
 
+// These tests are about recording payments; signing them is covered in
+// signing.test.js, so it stays out of the way here.
+const realRequestSigning = signing.requestSigning;
+
 test.before(async () => {
+  signing.requestSigning = async () => {};
   replset = await MongoMemoryReplSet.create({ replSet: { count: 1 } });
   process.env.MONGO_DB_URL = replset.getUri();
   await connectToDatabase();
@@ -103,6 +108,7 @@ test.before(async () => {
 }, { timeout: 180000 });
 
 test.after(async () => {
+  signing.requestSigning = realRequestSigning;
   await disconnectDatabase();
   await replset?.stop();
 });

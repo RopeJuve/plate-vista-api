@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import express from "express";
 import { z } from "zod";
 import { deliverLocal } from "../../realtime/events.js";
+import { signPaymentLater } from "../tse/signing.service.js";
 
 const emitSchema = z.object({
   restaurantId: z.string().regex(/^[a-f\d]{24}$/i),
@@ -13,6 +14,12 @@ const emitSchema = z.object({
     event: z.string().min(1),
     data: z.unknown(),
   }),
+});
+
+// Vercel's ping that a payment waits for its signature (ADR-0005).
+const signSchema = z.object({
+  kind: z.literal("PAYMENT"),
+  id: z.string().regex(/^[a-f\d]{24}$/i),
 });
 
 const secretsMatch = (header) => {
@@ -36,6 +43,18 @@ internalRouter.post("/emit", (req, res) => {
     return res.status(400).json({ code: "VALIDATION", message: "Invalid payload" });
   }
   deliverLocal(parsed.data);
+  return res.status(202).json({ ok: true });
+});
+
+internalRouter.post("/sign", (req, res) => {
+  if (!secretsMatch(req.get("x-internal-secret"))) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+  const parsed = signSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ code: "VALIDATION", message: "Invalid payload" });
+  }
+  signPaymentLater(parsed.data.id);
   return res.status(202).json({ ok: true });
 });
 

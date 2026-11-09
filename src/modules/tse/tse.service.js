@@ -31,7 +31,7 @@ export const setFiskalyClient = (client) => {
   clientOverride = client;
 };
 
-const fiskaly = () => {
+export const fiskaly = () => {
   if (clientOverride) return clientOverride;
   defaultClient ??= createFiskalyClient({
     apiKey: process.env.FISKALY_API_KEY,
