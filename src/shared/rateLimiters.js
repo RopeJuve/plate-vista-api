@@ -25,3 +25,13 @@ export const tableJoinLimiter = rateLimit({
     message: "Too many wrong join codes, please ask staff for help",
   },
 });
+
+// Guards the public receipt endpoint against token guessing and scraping.
+// 60 a minute leaves room for a guest reloading their receipt.
+export const receiptLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { code: "RATE_LIMITED", message: "Too many requests, please try again later" },
+});

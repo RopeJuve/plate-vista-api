@@ -97,7 +97,7 @@ const canCloseUnpaid = (actor) =>
 const unpaidTotalCents = async (restaurantId, sessionId, mongoSession) => {
   const paid = await Payment.exists({ restaurantId, sessionId }).session(mongoSession);
   if (paid) return 0;
-  const orders = await Order.find({ restaurantId, sessionId, status: { $ne: "cancelled" } })
+  const orders = await Order.findOnBill(restaurantId, sessionId)
     .select("totalCents")
     .session(mongoSession)
     .lean();

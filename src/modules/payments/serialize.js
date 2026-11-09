@@ -1,4 +1,4 @@
-const iso = (value) => (value == null ? null : new Date(value).toISOString());
+import { toIso as iso } from "../../shared/iso.js";
 
 export const serializePayment = (payment) => {
   if (!payment) return null;

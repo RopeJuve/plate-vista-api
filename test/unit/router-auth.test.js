@@ -24,6 +24,7 @@ import staffRouter from "../../src/modules/staff/staff.routes.js";
 import internalRouter from "../../src/modules/internal/internal.routes.js";
 import restaurantRouter from "../../src/modules/restaurants/restaurant.routes.js";
 import tseRouter from "../../src/modules/tse/tse.routes.js";
+import receiptRouter from "../../src/modules/payments/receipt.routes.js";
 
 const PLACEHOLDER_ID = "507f1f77bcf86cd799439011";
 
@@ -42,6 +43,7 @@ const PUBLIC_ROUTES = new Set([
   "r GET /:slug/menu-items",
   "r GET /:slug/menu-items/category",
   "r GET /:slug/menu-items/:id",
+  "receipts GET /:receiptToken",
 ]);
 
 const ROUTERS = {
@@ -58,6 +60,7 @@ const ROUTERS = {
   restaurant: restaurantRouter,
   tse: tseRouter,
   r: publicMenuRouter,
+  receipts: receiptRouter,
 };
 
 const listRoutes = (router) => {

@@ -38,11 +38,16 @@ export const orderStatusOf = (tickets) => {
     );
 };
 
+// The lines whose ticket is still being worked, i.e. not cancelled.
+export const linesOnActiveTickets = (items, tickets) => {
+  const active = new Set(tickets.filter(isActive).map((ticket) => ticket.station));
+  return items.filter((line) => active.has(stationOf(line)));
+};
+
 // Lines of a cancelled ticket come off the total. A fully cancelled order
 // keeps the total of what was cancelled.
 export const orderTotalCents = (items, tickets) => {
-  const active = new Set(tickets.filter(isActive).map((ticket) => ticket.station));
-  const counted = active.size === 0 ? items : items.filter((line) => active.has(stationOf(line)));
+  const counted = tickets.some(isActive) ? linesOnActiveTickets(items, tickets) : items;
   return counted.reduce((sum, line) => sum + line.lineTotalCents, 0);
 };
 
