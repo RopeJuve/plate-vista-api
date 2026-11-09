@@ -28,6 +28,7 @@ const ROUTES = [
   ["PUT", /^\/tss\/([^/]+)\/client\/([^/]+)$/, "createClient"],
   ["GET", /^\/tss\/([^/]+)\/client\/([^/]+)$/, "getClient"],
   ["PUT", /^\/tss\/([^/]+)\/tx\/([^/]+)$/, "tx"],
+  ["GET", /^\/tss\/([^/]+)\/tx\/([^/]+)$/, "getTx"],
 ];
 
 const TX_OPS = { ACTIVE: "startTx", FINISHED: "finishTx", CANCELLED: "cancelTx" };
@@ -158,6 +159,10 @@ export const createFakeFiskaly = ({
     getClient([tssId, clientId]) {
       const client = tsses.get(tssId)?.clients.get(clientId);
       return client ? json(200, client) : fail(404, "E_CLIENT_NOT_FOUND", "Client not found");
+    },
+    getTx([tssId, txId]) {
+      const tx = tsses.get(tssId)?.transactions.get(txId);
+      return tx ? json(200, tx) : fail(404, "E_TX_NOT_FOUND", "Transaction not found");
     },
     tx([tssId, txId], body, url) {
       const tss = tsses.get(tssId);

@@ -31,7 +31,7 @@ export const setFiskalyClient = (client) => {
   clientOverride = client;
 };
 
-const fiskaly = () => {
+export const fiskaly = () => {
   if (clientOverride) return clientOverride;
   defaultClient ??= createFiskalyClient({
     apiKey: process.env.FISKALY_API_KEY,
@@ -41,9 +41,12 @@ const fiskaly = () => {
   return defaultClient;
 };
 
+// The TSE can sign once setup has run to the end.
+export const isTseActive = (restaurant) => restaurant?.tse?.setupStep === "DONE";
+
 export const serializeTseStatus = (restaurant) => {
   const tse = restaurant?.tse || {};
-  if (tse.setupStep !== "DONE") return { active: false, failedSignatures: 0 };
+  if (!isTseActive(restaurant)) return { active: false, failedSignatures: 0 };
   return {
     active: true,
     tssSerial: tse.tssSerial,
@@ -74,7 +77,7 @@ const runSetup = async (restaurantId) => {
     .lean();
   if (!restaurant) throw notFound();
   const tse = { ...(restaurant.tse || {}) };
-  if (tse.setupStep === "DONE") return serializeTseStatus(restaurant);
+  if (isTseActive(restaurant)) return serializeTseStatus(restaurant);
   if (!hasCompleteLegalDetails(restaurant)) {
     throw new AppError(
       "RESTAURANT_DETAILS_MISSING",

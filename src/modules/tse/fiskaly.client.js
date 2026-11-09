@@ -129,6 +129,7 @@ export const createFiskalyClient = ({
     createClient: (tssId, clientId, serialNumber) =>
       request("PUT", `/tss/${id(tssId)}/client/${id(clientId)}`, { serial_number: serialNumber }),
     getClient: (tssId, clientId) => find(`/tss/${id(tssId)}/client/${id(clientId)}`),
+    getTx: (tssId, txId) => find(`/tss/${id(tssId)}/tx/${id(txId)}`),
     startTx: (tssId, txId, { clientId, schema } = {}) =>
       tx(tssId, txId, 1, withSchema({ state: "ACTIVE", client_id: clientId }, schema)),
     finishTx: (tssId, txId, { clientId, schema, revision = 2 } = {}) =>

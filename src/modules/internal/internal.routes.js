@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import express from "express";
 import { z } from "zod";
 import { deliverLocal } from "../../realtime/events.js";
+import { SIGN_KINDS, signPaymentLater } from "../tse/signing.service.js";
 
 const emitSchema = z.object({
   restaurantId: z.string().regex(/^[a-f\d]{24}$/i),
@@ -15,6 +16,12 @@ const emitSchema = z.object({
   }),
 });
 
+// Vercel's ping that a payment waits for its signature (ADR-0005).
+const signSchema = z.object({
+  kind: z.literal(SIGN_KINDS.PAYMENT),
+  id: z.string().regex(/^[a-f\d]{24}$/i),
+});
+
 const secretsMatch = (header) => {
   const expected = process.env.INTERNAL_SECRET || "";
   const received = typeof header === "string" ? header : "";
@@ -25,18 +32,23 @@ const secretsMatch = (header) => {
   return timingSafeEqual(left, right);
 };
 
-const internalRouter = express.Router();
-
-internalRouter.post("/emit", (req, res) => {
+// Every internal route: the shared secret first, then a valid body, then
+// the work, answered with 202.
+const internalRoute = (schema, handle) => (req, res) => {
   if (!secretsMatch(req.get("x-internal-secret"))) {
     return res.status(401).json({ message: "Unauthorized" });
   }
-  const parsed = emitSchema.safeParse(req.body);
+  const parsed = schema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ code: "VALIDATION", message: "Invalid payload" });
   }
-  deliverLocal(parsed.data);
+  handle(parsed.data);
   return res.status(202).json({ ok: true });
-});
+};
+
+const internalRouter = express.Router();
+
+internalRouter.post("/emit", internalRoute(emitSchema, deliverLocal));
+internalRouter.post("/sign", internalRoute(signSchema, (body) => signPaymentLater(body.id)));
 
 export default internalRouter;

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   VAT_PERCENT,
+  centsToDecimal,
   mergeReceiptLines,
   splitGross,
   totalsByVat,
@@ -103,4 +104,14 @@ test("mergeReceiptLines does not mutate its input and drops extra fields", () =>
   assert.equal(line.quantity, 1);
   assert.deepEqual(Object.keys(merged[0]).sort(), ["lineTotalCents", "quantity", "title", "unitPriceCents", "vatRate"]);
   assert.equal(merged[0].quantity, 2);
+});
+
+test("centsToDecimal writes cents as a two-place decimal string", () => {
+  assert.equal(centsToDecimal(1250), "12.50");
+  assert.equal(centsToDecimal(420), "4.20");
+  assert.equal(centsToDecimal(5), "0.05");
+  assert.equal(centsToDecimal(0), "0.00");
+  assert.equal(centsToDecimal(100000), "1000.00");
+  assert.throws(() => centsToDecimal(12.5), RangeError);
+  assert.throws(() => centsToDecimal(-1), RangeError);
 });

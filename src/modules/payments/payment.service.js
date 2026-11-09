@@ -4,6 +4,7 @@ import Restaurant from "../restaurants/restaurant.model.js";
 import { serializePayment } from "./serialize.js";
 import { recordPaymentSchema } from "./payment.schemas.js";
 import { requestSigning } from "./signing.js";
+import { isTseActive } from "../tse/tse.service.js";
 import { getSessionBill } from "../ordering/order.service.js";
 import { findSession, touchSession } from "../ordering/session.service.js";
 import { AppError, isDuplicateKey } from "../../shared/errors.js";
@@ -27,7 +28,7 @@ const assertTseActive = async (restaurantId, mongoSession) => {
     .select("tse.setupStep")
     .session(mongoSession)
     .lean();
-  if (restaurant?.tse?.setupStep !== "DONE") {
+  if (!isTseActive(restaurant)) {
     throw new AppError("TSE_NOT_ACTIVE", "Activate the TSE before taking payments");
   }
 };
