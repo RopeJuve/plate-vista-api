@@ -7,6 +7,7 @@ process.env.INTERNAL_SECRET = "internal-secret-for-signing-tests";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import mongoose from "mongoose";
 import { MongoMemoryReplSet } from "mongodb-memory-server";
 import { connectToDatabase, disconnectDatabase } from "../../src/db/db.js";
 import { cancelOrder, createOrder } from "../../src/modules/ordering/order.service.js";
@@ -18,7 +19,7 @@ import Table from "../../src/modules/tables/table.model.js";
 import Employee from "../../src/modules/staff/employee.model.js";
 import Restaurant from "../../src/modules/restaurants/restaurant.model.js";
 import Category from "../../src/modules/categories/category.model.js";
-import { createFiskalyClient } from "../../src/modules/tse/fiskaly.client.js";
+import { createFiskalyClient, FiskalyError } from "../../src/modules/tse/fiskaly.client.js";
 import { setFiskalyClient, setupTse } from "../../src/modules/tse/tse.service.js";
 import { signPayment, MAX_AUTO_RETRIES } from "../../src/modules/tse/signing.service.js";
 import { createTseSweep } from "../../src/jobs/tseSweep.js";
@@ -314,6 +315,100 @@ test("after 20 failures the payment stays FAILED and is no longer retried automa
   await createTseSweep({ now: () => new Date(Date.now() + 365 * 24 * 3600_000) }).runOnce();
   assert.deepEqual(fake.ops(), []);
   assert.equal((await stored(place, payment.id)).tse.status, "FAILED");
+
+  // A ping or /internal/sign doesn't get round the limit either.
+  assert.equal(await signPayment(payment.id), null);
+  assert.deepEqual(fake.ops(), []);
+  assert.equal((await stored(place, payment.id)).tse.retryCount, MAX_AUTO_RETRIES);
+});
+
+test("a line from before categories had a VAT rate is signed at its station's rate", async () => {
+  const place = await fixture();
+  const placed = await place.order([[place.pizza, 1], [place.beer, 1]]);
+  // Older orders were stored without a rate on their lines (ADR-0004).
+  await mongoose.connection
+    .collection("orders")
+    .updateOne({ _id: new mongoose.Types.ObjectId(String(placed._id)) }, { $unset: { "items.$[].vatRate": "" } });
+  const payment = await place.pay(placed.sessionId, "CASH", 1250 + 420);
+  fake.clearCalls();
+
+  await signPayment(payment.id);
+
+  assert.deepEqual(receiptOf(finishCalls()[0]).amounts_per_vat_rate, [
+    { vat_rate: "NORMAL", amount: "4.20" },
+    { vat_rate: "REDUCED_1", amount: "12.50" },
+  ]);
+});
+
+test("a signer whose lock ran out cannot turn a SIGNED payment back to FAILED", async () => {
+  const place = await fixture();
+  const placed = await place.order([[place.pizza, 1]]);
+  const payment = await place.pay(placed.sessionId, "CASH", 1250);
+  let stalled = true;
+  // The first signer stalls in finishTx past its lock; a second signer signs
+  // the payment meanwhile; then the first one's fiskaly call fails.
+  setFiskalyClient({
+    ...client,
+    finishTx: async (...args) => {
+      if (!stalled) return client.finishTx(...args);
+      stalled = false;
+      await Payment.updateOne(
+        { _id: payment.id, restaurantId: place.restaurant._id },
+        { $set: { "tse.lockedUntil": new Date(Date.now() - 1000) } }
+      );
+      assert.equal((await signPayment(payment.id)).tse.status, "SIGNED");
+      throw new FiskalyError({ status: 503, code: "E_UNAVAILABLE", message: "too late" });
+    },
+  });
+
+  assert.equal(await signPayment(payment.id), null);
+
+  const saved = await stored(place, payment.id);
+  assert.equal(saved.tse.status, "SIGNED");
+  assert.equal(saved.tse.lastError ?? null, null);
+  assert.equal(saved.tse.retryCount ?? 0, 0);
+});
+
+test("a bill that doesn't add up to the payment fails for good, without retries", async () => {
+  const place = await fixture();
+  const placed = await place.order([[place.pizza, 1]]);
+  const payment = await place.pay(placed.sessionId, "CASH", 1250);
+  await Payment.updateOne(
+    { _id: payment.id, restaurantId: place.restaurant._id },
+    { $set: { amountCents: 1300 } }
+  );
+  fake.clearCalls();
+
+  await signPayment(payment.id);
+
+  const saved = await stored(place, payment.id);
+  assert.equal(saved.tse.status, "FAILED");
+  assert.match(saved.tse.lastError, /1250 cents but the payment is 1300/);
+  assert.equal(saved.tse.retryCount, MAX_AUTO_RETRIES);
+  assert.deepEqual(fake.ops({ withAuth: false }), []);
+  await createTseSweep({ now: () => new Date(Date.now() + 365 * 24 * 3600_000) }).runOnce();
+  assert.deepEqual(fake.ops({ withAuth: false }), []);
+});
+
+test("a fiskaly transaction that ended CANCELLED is replaced by a new one", async () => {
+  const place = await fixture();
+  const placed = await place.order([[place.pizza, 1]]);
+  const payment = await place.pay(placed.sessionId, "CASH", 1250);
+  const cancelledTxId = randomUUID();
+  await Payment.updateOne(
+    { _id: payment.id, restaurantId: place.restaurant._id },
+    { $set: { "tse.txId": cancelledTxId, "tse.status": "FAILED", "tse.retryCount": 1 } }
+  );
+  await client.startTx(place.tse.tssId, cancelledTxId, { clientId: place.tse.clientId });
+  await client.cancelTx(place.tse.tssId, cancelledTxId, { clientId: place.tse.clientId });
+  fake.clearCalls();
+
+  await signPayment(payment.id);
+
+  const saved = await stored(place, payment.id);
+  assert.equal(saved.tse.status, "SIGNED");
+  assert.notEqual(saved.tse.txId, cancelledTxId);
+  assert.deepEqual(fake.ops({ withAuth: false }), ["getTx", "startTx", "finishTx"]);
 });
 
 test("the sweep picks up a payment whose ping never arrived", async () => {

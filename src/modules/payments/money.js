@@ -10,6 +10,12 @@ const assertCents = (value, name) => {
   }
 };
 
+// Cents as a decimal string with two places, e.g. 1250 → "12.50" (fiskaly).
+export const centsToDecimal = (cents) => {
+  assertCents(cents, "cents");
+  return `${Math.trunc(cents / 100)}.${String(cents % 100).padStart(2, "0")}`;
+};
+
 const percentOf = (vatRate) => {
   const percent = VAT_PERCENT[vatRate];
   if (percent === undefined) throw new RangeError(`Unknown VAT rate ${vatRate}`);
