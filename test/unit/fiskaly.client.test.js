@@ -143,3 +143,50 @@ test("transactions start, finish with a signature, and cancel", async () => {
   assert.ok(twice instanceof FiskalyError);
   assert.equal(twice.status, 409);
 });
+
+test("getTss and getClient read fiskaly's state and return null on 404", async () => {
+  const { fake, client } = setup();
+  const { tssId, clientId } = await activate(client);
+  fake.clearCalls();
+
+  const tss = await client.getTss(tssId);
+  assert.equal(tss._id, tssId);
+  assert.equal(tss.state, "INITIALIZED");
+  assert.equal("admin_puk" in tss, false);
+  const registered = await client.getClient(tssId, clientId);
+  assert.equal(registered._id, clientId);
+  assert.equal(registered.serial_number, "PV-test");
+  assert.deepEqual(
+    fake.calls.map(({ op, method, path }) => `${op} ${method} ${path}`),
+    [`getTss GET /tss/${tssId}`, `getClient GET /tss/${tssId}/client/${clientId}`]
+  );
+
+  assert.equal(await client.getTss(randomUUID()), null);
+  assert.equal(await client.getClient(tssId, randomUUID()), null);
+  assert.equal(await client.getClient(randomUUID(), clientId), null);
+});
+
+test("getTss and getClient throw FiskalyError on errors other than 404", async () => {
+  const { fake, client } = setup();
+  const { tssId, clientId } = await activate(client);
+
+  fake.failNext("getTss", { status: 500, code: "E_INTERNAL" });
+  const tssError = await client.getTss(tssId).catch((caught) => caught);
+  assert.ok(tssError instanceof FiskalyError);
+  assert.equal(tssError.status, 500);
+
+  fake.failNext("getClient", { status: 503, code: "E_UNAVAILABLE" });
+  const clientError = await client.getClient(tssId, clientId).catch((caught) => caught);
+  assert.ok(clientError instanceof FiskalyError);
+  assert.equal(clientError.status, 503);
+
+  fake.failNext("getTss", { throws: new TypeError("socket hang up") });
+  const network = await client.getTss(tssId).catch((caught) => caught);
+  assert.ok(network instanceof FiskalyError);
+  assert.equal(network.code, "NETWORK_ERROR");
+
+  fake.clearCalls();
+  fake.expireTokens();
+  assert.equal((await client.getTss(tssId)).state, "INITIALIZED");
+  assert.deepEqual(fake.ops(), ["getTss", "auth", "getTss"]);
+});

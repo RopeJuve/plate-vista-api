@@ -5,6 +5,7 @@
 //   fake.failNext("adminAuth", { status: 500 });   // script a failure
 //   fake.ops();                                    // ["auth", "createTss", ...]
 //   fake.expireTokens();                           // next call gets a 401
+//   fake.afterNext("createTss", () => { ... });    // run a hook once the call succeeded
 import { randomBytes, randomUUID } from "node:crypto";
 
 const json = (status, body, requestId = randomUUID()) =>
@@ -25,6 +26,7 @@ const ROUTES = [
   ["POST", /^\/tss\/([^/]+)\/admin\/auth$/, "adminAuth"],
   ["POST", /^\/tss\/([^/]+)\/admin\/logout$/, "adminLogout"],
   ["PUT", /^\/tss\/([^/]+)\/client\/([^/]+)$/, "createClient"],
+  ["GET", /^\/tss\/([^/]+)\/client\/([^/]+)$/, "getClient"],
   ["PUT", /^\/tss\/([^/]+)\/tx\/([^/]+)$/, "tx"],
 ];
 
@@ -40,6 +42,7 @@ export const createFakeFiskaly = ({
   const tokens = new Map();
   const calls = [];
   const failures = [];
+  const hooks = [];
   let signatureCounter = 0;
 
   const route = (method, pathname) => {
@@ -109,7 +112,7 @@ export const createFakeFiskaly = ({
       const allowed =
         (tss.state === "CREATED" && body?.state === "UNINITIALIZED") ||
         (tss.state === "UNINITIALIZED" && body?.state === "INITIALIZED" && tss.admin_authenticated) ||
-        (tss.state === "INITIALIZED" && body?.state === "DISABLED") ||
+        (body?.state === "DISABLED" && tss.state !== "DELETED") ||
         tss.state === body?.state;
       if (!allowed) return fail(409, "E_TSS_STATE", `Cannot move TSS from ${tss.state} to ${body?.state}`);
       tss.state = body.state;
@@ -136,6 +139,7 @@ export const createFakeFiskaly = ({
     adminLogout([tssId]) {
       const tss = tsses.get(tssId);
       if (!tss) return fail(404, "E_TSS_NOT_FOUND", "TSS not found");
+      if (!tss.admin_authenticated) return fail(401, "E_ADMIN_NOT_AUTHENTICATED", "Admin is not authenticated");
       tss.admin_authenticated = false;
       return json(200, {});
     },
@@ -150,6 +154,10 @@ export const createFakeFiskaly = ({
       const client = { _id: clientId, serial_number: body.serial_number, tss_id: tssId, state: "REGISTERED" };
       tss.clients.set(clientId, client);
       return json(200, client);
+    },
+    getClient([tssId, clientId]) {
+      const client = tsses.get(tssId)?.clients.get(clientId);
+      return client ? json(200, client) : fail(404, "E_CLIENT_NOT_FOUND", "Client not found");
     },
     tx([tssId, txId], body, url) {
       const tss = tsses.get(tssId);
@@ -233,7 +241,10 @@ export const createFakeFiskaly = ({
     }
     if (op !== "auth" && !authorized(init.headers)) return fail(401, "E_UNAUTHORIZED", "Invalid or expired token");
     const handler = handlers[op] || handlers.tx;
-    return handler(params, body, url);
+    const response = handler(params, body, url);
+    const hook = response.ok ? hooks.findIndex((entry) => entry.matches(calls.at(-1))) : -1;
+    if (hook !== -1) await hooks.splice(hook, 1)[0].run();
+    return response;
   };
 
   return {
@@ -248,9 +259,17 @@ export const createFakeFiskaly = ({
     failNext: (op, { status = 500, code = "E_INTERNAL", message = "Scripted failure", throws } = {}) => {
       failures.push({ op, status, code, message, throws });
     },
+    // Run `run` once, right after the next successful call matching `match`
+    // (an op name or a predicate on { op, method, path, body }) and before its
+    // response goes back. Tests use it to fail the save that follows.
+    afterNext: (match, run) => {
+      const matches = typeof match === "function" ? match : (call) => call.op === match;
+      hooks.push({ matches, run });
+    },
     // Revoke every token, so the next authenticated call gets a 401.
     expireTokens: () => tokens.clear(),
     tss: (tssId) => tsses.get(tssId),
+    allTss: () => [...tsses.values()],
     get signatureCounter() {
       return signatureCounter;
     },

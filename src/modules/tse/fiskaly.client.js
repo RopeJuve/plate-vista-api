@@ -106,6 +106,13 @@ export const createFiskalyClient = ({
     throw retry.error;
   };
 
+  // For reads where "not there" is an answer, not a failure.
+  const find = (path) =>
+    request("GET", path).catch((error) => {
+      if (error instanceof FiskalyError && error.status === 404) return null;
+      throw error;
+    });
+
   const tx = (tssId, txId, revision, body) =>
     request("PUT", `/tss/${id(tssId)}/tx/${id(txId)}?tx_revision=${Number(revision)}`, body);
 
@@ -113,6 +120,7 @@ export const createFiskalyClient = ({
 
   return {
     createTss: (tssId, metadata) => request("PUT", `/tss/${id(tssId)}`, metadata ? { metadata } : {}),
+    getTss: (tssId) => find(`/tss/${id(tssId)}`),
     setTssState: (tssId, state) => request("PATCH", `/tss/${id(tssId)}`, { state }),
     changeAdminPin: (tssId, { adminPuk, newAdminPin }) =>
       request("PATCH", `/tss/${id(tssId)}/admin`, { admin_puk: adminPuk, new_admin_pin: newAdminPin }),
@@ -120,6 +128,7 @@ export const createFiskalyClient = ({
     adminLogout: (tssId) => request("POST", `/tss/${id(tssId)}/admin/logout`, {}),
     createClient: (tssId, clientId, serialNumber) =>
       request("PUT", `/tss/${id(tssId)}/client/${id(clientId)}`, { serial_number: serialNumber }),
+    getClient: (tssId, clientId) => find(`/tss/${id(tssId)}/client/${id(clientId)}`),
     startTx: (tssId, txId, { clientId, schema } = {}) =>
       tx(tssId, txId, 1, withSchema({ state: "ACTIVE", client_id: clientId }, schema)),
     finishTx: (tssId, txId, { clientId, schema, revision = 2 } = {}) =>
