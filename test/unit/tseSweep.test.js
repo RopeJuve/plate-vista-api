@@ -18,8 +18,8 @@ test("an overlapping sweep run is skipped", async () => {
   const gate = deferred();
   const signed = [];
   const sweep = createTseSweep({
-    findDue: async () => [{ _id: "a" }, { _id: "b" }],
-    sign: async (id) => {
+    findDue: async () => [{ kind: "PAYMENT", id: "a" }, { kind: "ORDER", id: "b" }],
+    sign: async ({ id }) => {
       await gate.promise;
       signed.push(id);
     },
@@ -49,11 +49,11 @@ test("the sweep asks for at most 50 due payments below 20 retries", async () => 
   assert.deepEqual(asked, { now, limit: 50, maxRetries: 20 });
 });
 
-test("one payment's error does not stop the rest of the batch", async () => {
+test("one signature's error does not stop the rest of the batch", async () => {
   const signed = [];
   const sweep = createTseSweep({
-    findDue: async () => [{ _id: "a" }, { _id: "b" }],
-    sign: async (id) => {
+    findDue: async () => [{ kind: "PAYMENT", id: "a" }, { kind: "ORDER", id: "b" }],
+    sign: async ({ id }) => {
       if (id === "a") throw new Error("boom");
       signed.push(id);
     },
@@ -69,7 +69,7 @@ test("the sweep runs every interval and stop waits for the current run", async (
     intervalMs: 10,
     findDue: async () => {
       runs += 1;
-      return [{ _id: "a" }];
+      return [{ kind: "PAYMENT", id: "a" }];
     },
     sign: () => gate.promise,
   });

@@ -1,39 +1,32 @@
-import { randomUUID } from "node:crypto";
 import Payment, { SIGNATURE_STATUSES } from "../payments/payment.model.js";
-import Restaurant from "../restaurants/restaurant.model.js";
 import { getBillLines } from "../ordering/order.service.js";
+import { findDueOrders, signOrder } from "../ordering/order.signing.js";
 import { centsToDecimal, totalsByVat } from "../payments/money.js";
 import { captureException, logger } from "../../shared/logger.js";
-import { FiskalyError } from "./fiskaly.client.js";
-import { fiskaly, isTseActive } from "./tse.service.js";
+import {
+  failureFields,
+  finishTransaction,
+  fromUnix,
+  isExpected,
+  isPermanent,
+  lastErrorText,
+  LOCK_MS,
+  MAX_AUTO_RETRIES,
+  SigningError,
+  signingDevice,
+} from "./transaction.js";
+
+export { backoffMs, LOCK_MS, MAX_AUTO_RETRIES } from "./transaction.js";
 
 // Signs each payment as its own Kassenbeleg transaction at the restaurant's
 // TSE (ADR-0003), after the reply and on the Render server (ADR-0005). The
 // payment itself never changes here; only its `tse` part does.
 
-export const LOCK_MS = 60_000;
-// After this many failures only a person retries (#29).
-export const MAX_AUTO_RETRIES = 20;
-const BACKOFF_FIRST_MS = 30_000;
-const BACKOFF_MAX_MS = 30 * 60_000;
 const SIGNABLE = SIGNATURE_STATUSES.filter((status) => status !== "SIGNED");
 
-// What the internal channel can ask Render to sign.
-export const SIGN_KINDS = Object.freeze({ PAYMENT: "PAYMENT" });
-
-// 30 s, 1 m, 2 m … capped at 30 m, for the n-th failure in a row.
-export const backoffMs = (failures) =>
-  Math.min(BACKOFF_FIRST_MS * 2 ** Math.max(0, failures - 1), BACKOFF_MAX_MS);
-
-// A signing problem on our side. A permanent one cannot be fixed by trying
-// again, so automatic retries stop at once and a person has to look (#29).
-class SigningError extends Error {
-  constructor(message, { permanent = false } = {}) {
-    super(message);
-    this.name = "SigningError";
-    this.permanent = permanent;
-  }
-}
+// What can be sent to be signed, as `{ kind, id }`: a payment, or an order
+// with its corrections (src/modules/ordering/order.signing.js).
+export const SIGN_KINDS = Object.freeze({ PAYMENT: "PAYMENT", ORDER: "ORDER" });
 
 // The bill's lines by VAT rate, built the same way as the guest's Receipt,
 // so the signed Kassenbeleg and the Receipt always agree (ADR-0003/0004).
@@ -63,18 +56,6 @@ const receiptSchema = async (payment) => ({
     },
   },
 });
-
-const fromUnix = (seconds) => (seconds == null ? undefined : new Date(Number(seconds) * 1000));
-
-// The text kept in `tse.lastError`: short, and never a PIN, PUK or secret
-// (fiskaly's messages carry none).
-const lastErrorText = (error) => {
-  const text =
-    error instanceof FiskalyError
-      ? `fiskaly ${error.status}${error.code ? ` ${error.code}` : ""}: ${error.message}`
-      : error?.message || String(error);
-  return text.slice(0, 500);
-};
 
 // Field names inside the payment's `tse` part, for $set / $unset.
 const tseFields = (fields) =>
@@ -113,7 +94,6 @@ export const signPayment = async (paymentId) => {
     "tse.lockedUntil": payment.tse.lockedUntil,
   };
   const ids = { restaurantId: String(payment.restaurantId), paymentId: String(payment._id) };
-  const tse = { ...payment.tse };
   const saveOutcome = async (update) => {
     const saved = await Payment.findOneAndUpdate(ours, update, { new: true }).lean();
     if (!saved) logger.warn(ids, "payment signing lost its lock; the newer signer's result stands");
@@ -125,32 +105,15 @@ export const signPayment = async (paymentId) => {
   };
 
   try {
-    const restaurant = await Restaurant.findById(payment.restaurantId).select("tse").lean();
-    const { tssId, clientId } = restaurant?.tse || {};
-    if (!isTseActive(restaurant) || !tssId || !clientId) {
-      throw new SigningError("the restaurant's TSE is not active");
-    }
+    const { tssId, clientId } = await signingDevice(payment.restaurantId);
     const schema = await receiptSchema(payment);
-    const client = fiskaly();
-
-    // The transaction id is saved before fiskaly hears it, and fiskaly is
-    // asked where it got to, so a run that stopped half way is picked up.
-    // A transaction that ended CANCELLED can't be finished: start a new one.
-    let tx = tse.txId ? await client.getTx(tssId, tse.txId) : null;
-    if (!tse.txId || tx?.state === "CANCELLED") {
-      tse.txId = randomUUID();
-      tx = null;
-      await saveTxId(tse.txId);
-    }
-    if (!tx) tx = await client.startTx(tssId, tse.txId, { clientId });
-    if (tx.state === "ACTIVE") {
-      tx = await client.finishTx(tssId, tse.txId, {
-        clientId,
-        schema,
-        revision: Number(tx.revision || 1) + 1,
-      });
-    }
-    if (tx.state !== "FINISHED") throw new SigningError(`the fiskaly transaction is ${tx.state}`);
+    const { tx } = await finishTransaction({
+      tssId,
+      clientId,
+      txId: payment.tse.txId,
+      saveTxId,
+      schema: () => schema,
+    });
 
     return await saveOutcome({
       $set: tseFields({
@@ -168,11 +131,11 @@ export const signPayment = async (paymentId) => {
       $unset: tseFields({ lockedUntil: 1, lastError: 1, nextAttemptAt: 1 }),
     });
   } catch (error) {
-    const permanent = error instanceof SigningError && error.permanent;
-    const retryCount = permanent ? MAX_AUTO_RETRIES : (payment.tse?.retryCount || 0) + 1;
+    const permanent = isPermanent(error);
+    const failed = failureFields(error, payment.tse?.retryCount);
     const fields = {
       ...ids,
-      retryCount,
+      retryCount: failed.retryCount,
       permanent,
       status: error?.status,
       code: error?.code,
@@ -181,29 +144,31 @@ export const signPayment = async (paymentId) => {
     };
     if (permanent) logger.error(fields, "payment signing failed for good; a person has to look");
     else logger.warn(fields, "payment signing failed");
-    if (permanent || (!(error instanceof FiskalyError) && !(error instanceof SigningError))) {
-      captureException(error);
-    }
+    if (permanent || !isExpected(error)) captureException(error);
     return saveOutcome({
-      $set: tseFields({
-        status: "FAILED",
-        lastError: lastErrorText(error),
-        retryCount,
-        nextAttemptAt: new Date(Date.now() + backoffMs(retryCount)),
-      }),
+      $set: tseFields(failed),
       $unset: tseFields({ lockedUntil: 1 }),
     });
   }
 };
 
+// Signs a payment or an order, whichever the target names.
+export const sign = ({ kind, id }) => {
+  if (kind === SIGN_KINDS.PAYMENT) return signPayment(id);
+  if (kind === SIGN_KINDS.ORDER) return signOrder(id);
+  throw new Error(`Unknown signing kind ${kind}`);
+};
+
 // Signs after the current request has replied; a failure only logs, and the
 // sweep tries again.
-export const signPaymentLater = (paymentId) => {
+export const signLater = (target) => {
   setImmediate(() => {
-    signPayment(paymentId).catch((error) => {
-      logger.error({ paymentId: String(paymentId), err: error }, "payment signing crashed");
-      captureException(error);
-    });
+    Promise.resolve()
+      .then(() => sign(target))
+      .catch((error) => {
+        logger.error({ kind: target.kind, id: String(target.id), err: error }, "signing crashed");
+        captureException(error);
+      });
   });
 };
 
@@ -220,3 +185,15 @@ export const findDuePayments = ({ now = new Date(), limit = 50, maxRetries = MAX
     .select("_id")
     .setOptions({ skipTenant: true })
     .lean();
+
+// Everything the sweep should sign now, payments first, then orders, at most
+// `limit` together.
+export const findDueSignatures = async ({ now = new Date(), limit = 50, maxRetries = MAX_AUTO_RETRIES } = {}) => {
+  const payments = await findDuePayments({ now, limit, maxRetries });
+  const orders =
+    payments.length < limit ? await findDueOrders({ now, limit: limit - payments.length, maxRetries }) : [];
+  return [
+    ...payments.map(({ _id }) => ({ kind: SIGN_KINDS.PAYMENT, id: _id })),
+    ...orders.map(({ _id }) => ({ kind: SIGN_KINDS.ORDER, id: _id })),
+  ];
+};

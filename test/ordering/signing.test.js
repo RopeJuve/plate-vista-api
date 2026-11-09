@@ -22,6 +22,7 @@ import Category from "../../src/modules/categories/category.model.js";
 import { createFiskalyClient, FiskalyError } from "../../src/modules/tse/fiskaly.client.js";
 import { setFiskalyClient, setupTse } from "../../src/modules/tse/tse.service.js";
 import { signPayment, MAX_AUTO_RETRIES } from "../../src/modules/tse/signing.service.js";
+import { signOrder } from "../../src/modules/ordering/order.signing.js";
 import { createTseSweep } from "../../src/jobs/tseSweep.js";
 import { createFakeFiskaly } from "../support/fakeFiskaly.js";
 
@@ -134,8 +135,11 @@ test.beforeEach(() => {
   fake = createFakeFiskaly();
   client = createFiskalyClient({ apiKey: "key", apiSecret: "secret", fetch: fake.fetch });
   setFiskalyClient(client);
-  // Most tests call signPayment themselves.
-  signing.requestSigning = async () => {};
+  // Most tests call signPayment themselves. Orders are signed as soon as
+  // they are placed, so the sweeps here only find payments.
+  signing.requestSigning = async ({ kind, id }) => {
+    if (kind === "ORDER") await signOrder(id);
+  };
 });
 
 test.afterEach(() => {

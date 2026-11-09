@@ -33,7 +33,7 @@ test("on Vercel a payment is sent to Render's /internal/sign with the secret", a
       sent.push({ url: String(url), init });
       return new Response(null, { status: 202 });
     };
-    await requestSigning(PAYMENT_ID);
+    await requestSigning({ kind: "PAYMENT", id: PAYMENT_ID });
     assert.equal(sent.length, 1);
     assert.equal(sent[0].url, "https://render.example.com/internal/sign");
     assert.equal(sent[0].init.method, "POST");
@@ -54,7 +54,7 @@ test("on Vercel a failed ping only logs, without the secret", async () => {
       setImmediate(failed);
       throw new Error("connect ECONNREFUSED");
     };
-    await requestSigning(PAYMENT_ID);
+    await requestSigning({ kind: "PAYMENT", id: PAYMENT_ID });
     await done;
     await new Promise((resolve) => setImmediate(resolve));
     const logged = JSON.stringify(capturedLogs);
@@ -74,7 +74,7 @@ test("on Vercel the ping gives up after 1.5 s", async () => {
         });
       });
     const started = Date.now();
-    await requestSigning(PAYMENT_ID);
+    await requestSigning({ kind: "PAYMENT", id: PAYMENT_ID });
     assert.ok(Date.now() - started < 500, "the request does not wait for Render");
     while (!aborted && Date.now() - started < 3000) await new Promise((resolve) => setTimeout(resolve, 50));
     assert.ok(aborted);
