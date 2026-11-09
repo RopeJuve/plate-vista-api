@@ -81,5 +81,10 @@ orderSchema.index({ restaurantId: 1, createdAt: -1 });
 orderSchema.index({ restaurantId: 1, sessionId: 1 });
 orderSchema.plugin(tenantPlugin);
 
+// The orders that make up a session's bill: every one not fully cancelled.
+orderSchema.statics.findOnBill = function findOnBill(restaurantId, sessionId) {
+  return this.find({ restaurantId, sessionId, status: { $ne: "cancelled" } });
+};
+
 const Order = model("Order", orderSchema);
 export default Order;

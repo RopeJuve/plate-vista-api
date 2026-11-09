@@ -24,6 +24,7 @@ import statisticsRouter from "./modules/stats/stats.routes.js";
 import internalRouter from "./modules/internal/internal.routes.js";
 import restaurantRouter from "./modules/restaurants/restaurant.routes.js";
 import tseRouter from "./modules/tse/tse.routes.js";
+import receiptRouter from "./modules/payments/receipt.routes.js";
 
 void initSentry();
 
@@ -117,6 +118,7 @@ app.use("/api/v1/statistics", statisticsRouter);
 app.use("/api/v1/staff", staffRouter);
 app.use("/api/v1/restaurant", restaurantRouter);
 app.use("/api/v1/tse", tseRouter);
+app.use("/api/v1/receipts", receiptRouter);
 app.use("/internal", internalRouter);
 
 app.use((_req, res) => {

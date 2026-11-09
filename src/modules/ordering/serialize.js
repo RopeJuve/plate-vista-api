@@ -1,13 +1,9 @@
 import { ticketsOf } from "./tickets.js";
+import { toIso } from "../../shared/iso.js";
 
 const idOf = (value) => (value == null ? null : String(value));
 
-const iso = (value) => {
-  if (value == null) return null;
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  return date.toISOString();
-};
+const iso = toIso;
 
 export const serializeOrder = (order) => {
   const source = order?.toObject ? order.toObject() : order;
