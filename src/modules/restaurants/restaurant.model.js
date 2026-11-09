@@ -35,7 +35,16 @@ const restaurantSchema = new Schema(
       adminPukEnc: { type: String, select: false },
       setupStep: {
         type: String,
-        enum: ["TSS_CREATED", "UNINITIALIZED", "PIN_SET", "INITIALIZED", "CLIENT_CREATED", "DONE"],
+        enum: [
+          "TSS_PENDING",
+          "TSS_CREATED",
+          "UNINITIALIZED",
+          "PIN_SET",
+          "INITIALIZED",
+          "CLIENT_PENDING",
+          "CLIENT_CREATED",
+          "DONE",
+        ],
       },
       setupAt: { type: Date },
     },

@@ -167,7 +167,7 @@ test("a setup that fails at admin auth answers 502 and the next call resumes the
   fake.clearCalls();
   const resumed = await asOwner("post", "/setup");
   assert.equal(resumed.status, 200, JSON.stringify(resumed.body));
-  assert.deepEqual(fake.ops({ withAuth: false }), SETUP_OPS.slice(3));
+  assert.deepEqual(fake.ops({ withAuth: false }), ["getTss", ...SETUP_OPS.slice(3)]);
   const after = await secretsOf(restaurant._id);
   assert.equal(after.tse.tssId, before.tse.tssId);
   assert.equal(after.pin, before.pin);
@@ -179,12 +179,158 @@ test("a setup that fails at client creation resumes with a fresh admin login", a
   const { restaurant, asOwner } = await place();
   fake.failNext("createClient", { status: 503 });
   assert.equal((await asOwner("post", "/setup")).status, 502);
-  assert.equal((await secretsOf(restaurant._id)).tse.setupStep, "INITIALIZED");
+  const before = await secretsOf(restaurant._id);
+  assert.equal(before.tse.setupStep, "CLIENT_PENDING");
+  assert.ok(before.tse.clientId, "the client id is saved before fiskaly hears it");
 
   fake.clearCalls();
   const resumed = await asOwner("post", "/setup");
   assert.equal(resumed.status, 200, JSON.stringify(resumed.body));
-  assert.deepEqual(fake.ops({ withAuth: false }), ["adminAuth", "createClient", "adminLogout"]);
+  assert.deepEqual(fake.ops({ withAuth: false }), ["getTss", "getClient", "adminAuth", "createClient", "adminLogout"]);
+  const after = await secretsOf(restaurant._id);
+  assert.equal(after.tse.clientId, before.tse.clientId);
+  assert.ok(fake.tss(after.tse.tssId).clients.has(after.tse.clientId));
+});
+
+// Makes the next Restaurant.updateOne fail, as if Mongo timed out right after
+// fiskaly applied a step.
+const failNextSave = () => {
+  const original = Restaurant.updateOne;
+  Restaurant.updateOne = async () => {
+    Restaurant.updateOne = original;
+    throw new Error("Simulated Mongo timeout");
+  };
+};
+
+const assertSetUpOnce = async (restaurantId) => {
+  const { tse, pin, puk } = await secretsOf(restaurantId);
+  assert.equal(tse.setupStep, "DONE");
+  const live = fake.allTss().filter((tss) => tss.state !== "DISABLED");
+  assert.equal(live.length, 1, "exactly one usable TSS");
+  const [tss] = live;
+  assert.equal(tss._id, tse.tssId);
+  assert.equal(tss.state, "INITIALIZED");
+  assert.equal(tss.admin_authenticated, false);
+  assert.equal(tss.admin_pin, pin);
+  assert.equal(tss.admin_puk, puk);
+  assert.equal(tse.tssSerial, tss.serial_number);
+  assert.equal(fake.allTss().reduce((sum, each) => sum + each.clients.size, 0), 1, "exactly one client");
+  assert.ok(tss.clients.has(tse.clientId));
+  return { tse, pin, puk };
+};
+
+const AFTER_EACH_STEP = [
+  ["setTssState(UNINITIALIZED)", (call) => call.op === "setTssState" && call.body.state === "UNINITIALIZED"],
+  ["changeAdminPin", (call) => call.op === "changeAdminPin"],
+  ["setTssState(INITIALIZED)", (call) => call.op === "setTssState" && call.body.state === "INITIALIZED"],
+  ["createClient", (call) => call.op === "createClient"],
+  ["adminLogout", (call) => call.op === "adminLogout"],
+];
+
+for (const [label, match] of AFTER_EACH_STEP) {
+  test(`fiskaly applies ${label} but the save after it fails: a retry finishes on the same TSS`, async () => {
+    const { restaurant, asOwner } = await place();
+    fake.afterNext(match, failNextSave);
+    const failed = await asOwner("post", "/setup");
+    assert.notEqual(failed.status, 200);
+    assert.equal((await secretsOf(restaurant._id)).tse.setupStep === "DONE", false);
+
+    fake.clearCalls();
+    const resumed = await asOwner("post", "/setup");
+    assert.equal(resumed.status, 200, JSON.stringify(resumed.body));
+    assert.equal(fake.ops({ withAuth: false })[0], "getTss", "reads fiskaly's state first");
+    if (label !== "adminLogout") {
+      // The fake accepts some repeats that real fiskaly rejects, so check that
+      // the step that already went through is not sent again.
+      assert.equal(fake.calls.some(match), false, `${label} is not repeated`);
+    }
+    assert.equal(fake.allTss().length, 1);
+    const { tse, pin, puk } = await assertSetUpOnce(restaurant._id);
+    assert.equal(resumed.body.clientId, tse.clientId);
+    for (const text of [failed.text, resumed.text, JSON.stringify(capturedLogs)]) {
+      for (const secret of [pin, puk, API_SECRET]) assert.equal(text.includes(secret), false);
+    }
+  });
+}
+
+test("a TSS whose PUK was never saved is disabled and setup finishes on a new one", async () => {
+  const { restaurant, asOwner } = await place();
+  fake.afterNext("createTss", failNextSave);
+  assert.notEqual((await asOwner("post", "/setup")).status, 200);
+  const pending = await secretsOf(restaurant._id);
+  assert.equal(pending.tse.setupStep, "TSS_PENDING");
+  assert.equal(pending.puk, null);
+  const orphan = pending.tse.tssId;
+  assert.ok(fake.tss(orphan), "fiskaly created the TSS under the saved id");
+
+  clearCapturedLogs();
+  fake.clearCalls();
+  const resumed = await asOwner("post", "/setup");
+  assert.equal(resumed.status, 200, JSON.stringify(resumed.body));
+  assert.deepEqual(fake.ops({ withAuth: false }), ["getTss", "setTssState", ...SETUP_OPS]);
+  assert.equal(fake.tss(orphan).state, "DISABLED");
+  assert.deepEqual(fake.allTss().map((tss) => tss.state).sort(), ["DISABLED", "INITIALIZED"]);
+  const { tse, pin, puk } = await assertSetUpOnce(restaurant._id);
+  assert.notEqual(tse.tssId, orphan);
+
+  const warning = capturedLogs.find((entry) => entry?.tssId === orphan);
+  assert.ok(warning, "the orphaned TSS is logged");
+  assert.deepEqual(Object.keys(warning).sort(), ["restaurantId", "tssId"]);
+  assert.equal(warning.restaurantId, String(restaurant._id));
+  for (const secret of [pin, puk, API_SECRET, fake.tss(orphan).admin_puk]) {
+    assert.equal(JSON.stringify(capturedLogs).includes(secret), false);
+    assert.equal(resumed.text.includes(secret), false);
+  }
+});
+
+test("a TSS create that never reached fiskaly is retried with the saved id", async () => {
+  const { restaurant, asOwner } = await place();
+  fake.failNext("createTss", { throws: new TypeError("socket hang up") });
+  assert.equal((await asOwner("post", "/setup")).status, 502);
+  const pending = await secretsOf(restaurant._id);
+  assert.equal(pending.tse.setupStep, "TSS_PENDING");
+
+  fake.clearCalls();
+  const resumed = await asOwner("post", "/setup");
+  assert.equal(resumed.status, 200, JSON.stringify(resumed.body));
+  assert.deepEqual(fake.ops({ withAuth: false }), ["getTss", ...SETUP_OPS]);
+  const { tse } = await assertSetUpOnce(restaurant._id);
+  assert.equal(tse.tssId, pending.tse.tssId);
+});
+
+test("a saved PIN that fiskaly never received is set with the saved PUK on resume", async () => {
+  const { restaurant, asOwner } = await place();
+  fake.failNext("changeAdminPin", { status: 503 });
+  assert.equal((await asOwner("post", "/setup")).status, 502);
+  const before = await secretsOf(restaurant._id);
+  assert.equal(before.tse.setupStep, "UNINITIALIZED");
+  assert.ok(before.pin);
+
+  fake.clearCalls();
+  const resumed = await asOwner("post", "/setup");
+  assert.equal(resumed.status, 200, JSON.stringify(resumed.body));
+  const ops = fake.ops({ withAuth: false });
+  assert.equal(ops[0], "getTss");
+  assert.ok(ops.indexOf("adminAuth") < ops.indexOf("changeAdminPin"), "tries the saved PIN first");
+  const { pin } = await assertSetUpOnce(restaurant._id);
+  assert.equal(pin, before.pin);
+});
+
+test("setups saved before the write-ahead steps existed still resume", async () => {
+  const { restaurant, asOwner } = await place();
+  fake.failNext("createClient", { status: 503 });
+  assert.equal((await asOwner("post", "/setup")).status, 502);
+  // What #23 left behind when createClient failed: INITIALIZED and no client id.
+  await Restaurant.updateOne(
+    { _id: restaurant._id },
+    { $set: { "tse.setupStep": "INITIALIZED" }, $unset: { "tse.clientId": 1, "tse.clientSerial": 1 } }
+  );
+
+  fake.clearCalls();
+  const resumed = await asOwner("post", "/setup");
+  assert.equal(resumed.status, 200, JSON.stringify(resumed.body));
+  assert.deepEqual(fake.ops({ withAuth: false }), ["getTss", "adminAuth", "createClient", "adminLogout"]);
+  await assertSetUpOnce(restaurant._id);
 });
 
 test("only the owner and admins of the token's restaurant see or set up the TSE", async () => {
