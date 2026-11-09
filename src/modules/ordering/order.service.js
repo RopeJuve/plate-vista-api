@@ -19,6 +19,7 @@ import { findSession, openOrJoinSession, touchSession } from "./session.service.
 import { serializeOrder, serializeSession } from "./serialize.js";
 import Payment from "../payments/payment.model.js";
 import { serializePayment } from "../payments/serialize.js";
+import { defaultVatRate } from "../categories/category.model.js";
 
 export { serializeOrder };
 
@@ -487,6 +488,32 @@ export const getSessionBill = async (ctx, sessionId, mongoSession) => {
     totalCents,
     payment: serializePayment(payment),
   };
+};
+
+// Every line on the bill in the order it was ordered, leaving out the lines
+// of cancelled tickets. Lines from before categories had a VAT rate take
+// their station's usual rate, as the category migration did (ADR-0004).
+export const getBillLines = async (restaurantId, sessionId) => {
+  const orders = await Order.find({ restaurantId, sessionId, status: { $ne: "cancelled" } })
+    .sort({ createdAt: 1, _id: 1 })
+    .lean();
+  return orders.flatMap((order) => {
+    const active = new Set(
+      ticketsOf(order)
+        .filter((ticket) => ticket.status !== "cancelled")
+        .map((ticket) => ticket.station)
+    );
+    return order.items
+      .filter((line) => active.has(stationOf(line)))
+      .map((line) => ({
+        productId: String(line.productId),
+        title: line.title,
+        quantity: line.quantity,
+        unitPriceCents: line.unitPriceCents,
+        lineTotalCents: line.lineTotalCents,
+        vatRate: line.vatRate || defaultVatRate(stationOf(line)),
+      }));
+  });
 };
 
 export const getOrder = async (restaurantId, orderId) => {
