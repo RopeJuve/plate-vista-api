@@ -1,10 +1,9 @@
 import { Schema, model } from "mongoose";
 import { tenantPlugin } from "../../shared/tenantPlugin.js";
+import { VAT_RATES, defaultVatRate } from "./vatRates.js";
 
 export const STATIONS = ["kitchen", "bar"];
-// 19 % and 7 % (docs/adr/0004-vat-rate-belongs-to-category.md).
-export const VAT_RATES = ["NORMAL", "REDUCED_1"];
-export const defaultVatRate = (station) => (station === "bar" ? "NORMAL" : "REDUCED_1");
+export { VAT_RATES, defaultVatRate } from "./vatRates.js";
 export const CATEGORY_NAME_COLLATION = { locale: "en", strength: 2 };
 
 // A section of one restaurant's menu. Its station decides where every item in

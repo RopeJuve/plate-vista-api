@@ -13,7 +13,7 @@ const name = z
   .max(40, "Name must be at most 40 characters");
 const station = z.enum(STATIONS, { error: "Station must be kitchen or bar" });
 
-const vatRate = z.enum(VAT_RATES, { error: "VAT rate must be NORMAL or REDUCED_1" });
+const vatRate = z.enum(VAT_RATES, { error: `VAT rate must be ${VAT_RATES.join(" or ")}` });
 
 const createSchema = z.object({ name, station, vatRate: vatRate.optional() });
 const updateSchema = z.object({ name, station, vatRate }).partial();

@@ -1,7 +1,8 @@
 // Pure money helpers for the Receipt. Money is integer cents throughout.
 
-// docs/adr/0004-vat-rate-belongs-to-category.md
-export const VAT_PERCENT = Object.freeze({ NORMAL: 19, REDUCED_1: 7 });
+import { VAT_PERCENT } from "../categories/vatRates.js";
+
+export { VAT_PERCENT };
 
 const assertCents = (value, name) => {
   if (!Number.isInteger(value) || value < 0) {
