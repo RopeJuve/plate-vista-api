@@ -11,6 +11,11 @@ export const ErrorCodes = {
   RATE_LIMITED: "RATE_LIMITED",
   RESTAURANT_DETAILS_MISSING: "RESTAURANT_DETAILS_MISSING",
   TSE_SETUP_FAILED: "TSE_SETUP_FAILED",
+  TSE_NOT_ACTIVE: "TSE_NOT_ACTIVE",
+  BILL_PAID: "BILL_PAID",
+  BILL_CHANGED: "BILL_CHANGED",
+  BILL_EMPTY: "BILL_EMPTY",
+  BILL_UNPAID: "BILL_UNPAID",
   INTERNAL: "INTERNAL",
 };
 
@@ -27,6 +32,11 @@ const STATUS_BY_CODE = {
   RATE_LIMITED: 429,
   RESTAURANT_DETAILS_MISSING: 422,
   TSE_SETUP_FAILED: 502,
+  TSE_NOT_ACTIVE: 412,
+  BILL_PAID: 409,
+  BILL_CHANGED: 409,
+  BILL_EMPTY: 422,
+  BILL_UNPAID: 409,
   INTERNAL: 500,
 };
 
@@ -47,6 +57,7 @@ export const duplicateKeyOn = (error) => {
   if (!isDuplicateKey(error)) return null;
   const text = `${error.message || ""} ${error.cause?.message || ""}`;
   if (text.includes("clientOrderId")) return "clientOrderId";
+  if (text.includes("clientPaymentId")) return "clientPaymentId";
   if (text.includes("tableId")) return "tableId";
   if (text.includes("title")) return "title";
   if (text.includes("tableNumber")) return "tableNumber";
