@@ -27,6 +27,10 @@ import { findSession, openOrJoinSession, touchSession } from "./session.service.
 import { serializeOrder, serializeSession } from "./serialize.js";
 import Payment from "../payments/payment.model.js";
 import { serializePayment } from "../payments/serialize.js";
+import { requestSigning } from "../payments/signing.js";
+import Restaurant from "../restaurants/restaurant.model.js";
+import { isTseActive } from "../tse/tse.service.js";
+import { correctionFor, dropsSignature } from "./order.signing.js";
 
 export { serializeOrder };
 
@@ -160,6 +164,37 @@ const statusChange = (order, station) => ({
   ...(station ? { station } : {}),
 });
 
+// Orders of a restaurant with an active TSE wait for their signature; the
+// others have none, so ordering never depends on the TSE (ADR-0003).
+const signatureFor = async (restaurantId, mongoSession) => {
+  const restaurant = await Restaurant.findById(restaurantId)
+    .select("tse.setupStep")
+    .session(mongoSession)
+    .lean();
+  return isTseActive(restaurant) ? { tse: { status: "PENDING", retryCount: 0 } } : {};
+};
+
+// What a change to an order means for its TSE record: a correction to sign
+// when the order is signed already, or no signature at all when it was
+// cancelled whole before its Bestellung was started.
+const signatureChange = (before, after, { station } = {}) => {
+  const order = { ...before, ...after };
+  if (dropsSignature(order)) return { update: { $unset: { tse: 1 } }, correction: null };
+  const correction = correctionFor(order, { station });
+  return { update: correction ? { $push: { tseCorrections: correction } } : {}, correction };
+};
+
+// Asks for the order's signature after the commit. The order stands either
+// way; the sweep picks it up (ADR-0005).
+const askToSign = async (ctx, orderId) => {
+  try {
+    await requestSigning({ kind: "ORDER", id: String(orderId) });
+  } catch (error) {
+    logger.error({ restaurantId: ctx.restaurantId, orderId: String(orderId), err: error }, "signing request failed");
+    captureException(error);
+  }
+};
+
 const findExisting = async (restaurantId, clientOrderId) =>
   Order.findOne({ restaurantId, clientOrderId });
 
@@ -205,6 +240,7 @@ export const createOrder = async (ctx, input) => {
                 status: "pending",
                 rev: 1,
                 statusHistory: [{ status: "pending", at: new Date(), byEmployeeId }],
+                ...(await signatureFor(ctx.restaurantId, mongoSession)),
               },
             ],
             { session: mongoSession }
@@ -240,6 +276,7 @@ export const createOrder = async (ctx, input) => {
       });
     }
     publishOrder(ctx.restaurantId, order.sessionId, "order.created", { order });
+    if (saved.tse) await askToSign(ctx, saved._id);
     return { order, replayed: false };
   } catch (error) {
     logFailure(ctx, sessionId, error);
@@ -251,7 +288,9 @@ export const updateOrder = async (ctx, input) => {
   let sessionId = ctx.actor?.sessionId || null;
   try {
     const payload = parseOrThrow(updateOrderSchema, input);
+    let corrected = false;
     const order = await runTransaction(async (mongoSession) => {
+      corrected = false;
       const current = await Order.findOne({
         _id: payload.orderId,
         restaurantId: ctx.restaurantId,
@@ -283,14 +322,18 @@ export const updateOrder = async (ctx, input) => {
         productId,
         delta: (next.get(productId) || 0) - (previous.get(productId) || 0),
       }));
+      const edited = {
+        items: priced.items,
+        tickets: buildTickets(priced.items),
+        totalCents: priced.totalCents,
+      };
+      const signature = signatureChange(current.toObject(), edited);
+      corrected = Boolean(signature.correction);
       const updated = await Order.findOneAndUpdate(
         unchanged(current),
         {
-          $set: {
-            items: priced.items,
-            tickets: buildTickets(priced.items),
-            totalCents: priced.totalCents,
-          },
+          $set: edited,
+          ...signature.update,
           $inc: { rev: 1 },
         },
         { new: true, session: mongoSession }
@@ -307,6 +350,7 @@ export const updateOrder = async (ctx, input) => {
     });
     const dto = serializeOrder(order);
     publishOrder(ctx.restaurantId, dto.sessionId, "order.updated", { order: dto });
+    if (corrected) await askToSign(ctx, order._id);
     return { order: dto };
   } catch (error) {
     logFailure(ctx, sessionId, error);
@@ -387,7 +431,9 @@ export const cancelOrder = async (ctx, input) => {
       throw new AppError("FORBIDDEN", "Forbidden");
     }
     const payload = parseOrThrow(cancelOrderSchema, input);
+    let corrected = false;
     const order = await runTransaction(async (mongoSession) => {
+      corrected = false;
       const current = await Order.findOne({
         _id: payload.orderId,
         restaurantId: ctx.restaurantId,
@@ -436,6 +482,10 @@ export const cancelOrder = async (ctx, input) => {
       });
       const fields = ticketFields(current, tickets);
       const wholeOrder = fields.status === "cancelled";
+      const signature = signatureChange(current.toObject(), fields, {
+        station: cancelling.length === 1 ? cancelling[0].station : undefined,
+      });
+      corrected = Boolean(signature.correction);
       const updated = await Order.findOneAndUpdate(
         unchanged(current),
         {
@@ -444,6 +494,7 @@ export const cancelOrder = async (ctx, input) => {
             ...(wholeOrder ? { cancelReason: reason } : {}),
             ...(wholeOrder && ctx.actor.type === "employee" ? { cancelledBy: ctx.actor.id } : {}),
           },
+          ...(signature.update.$unset ? { $unset: signature.update.$unset } : {}),
           $push: {
             statusHistory: {
               status: "cancelled",
@@ -451,6 +502,7 @@ export const cancelOrder = async (ctx, input) => {
               byEmployeeId: ctx.actor.type === "employee" ? ctx.actor.id : null,
               ...(payload.station ? { station: payload.station } : {}),
             },
+            ...(signature.update.$push || {}),
           },
           $inc: { rev: 1 },
         },
@@ -464,6 +516,7 @@ export const cancelOrder = async (ctx, input) => {
       ...statusChange(dto, payload.station),
       reason: payload.reason || "",
     });
+    if (corrected) await askToSign(ctx, order._id);
     return { order: dto };
   } catch (error) {
     logFailure(ctx, sessionId, error);

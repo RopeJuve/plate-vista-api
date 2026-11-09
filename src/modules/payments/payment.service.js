@@ -93,7 +93,7 @@ export const recordPayment = async (ctx, sessionId, input) => {
 
   if (!result.replayed) {
     try {
-      await requestSigning(result.payment._id);
+      await requestSigning({ kind: "PAYMENT", id: result.payment._id });
     } catch (error) {
       // The payment stands; the signing sweep picks it up (ADR-0005).
       logger.error({ restaurantId: ctx.restaurantId, paymentId: String(result.payment._id), err: error }, "signing request failed");

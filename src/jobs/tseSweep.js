@@ -1,20 +1,16 @@
 import { captureException, logger } from "../shared/logger.js";
-import {
-  findDuePayments,
-  MAX_AUTO_RETRIES,
-  signPayment,
-} from "../modules/tse/signing.service.js";
+import { findDueSignatures, MAX_AUTO_RETRIES, sign as signTarget } from "../modules/tse/signing.service.js";
 
-// Every 30 s, signs payments whose signature is still waiting or failed and
-// due again (ADR-0005). Runs only where ENABLE_JOBS=true (src/server.js). A
+// Every 30 s, signs payments and orders (with their corrections) whose
+// signature is still waiting or failed and due again (ADR-0005). Runs only where ENABLE_JOBS=true (src/server.js). A
 // run never overlaps the one before it.
 export const createTseSweep = ({
   intervalMs = 30_000,
   batchSize = 50,
   maxRetries = MAX_AUTO_RETRIES,
   now = () => new Date(),
-  findDue = findDuePayments,
-  sign = signPayment,
+  findDue = findDueSignatures,
+  sign = signTarget,
 } = {}) => {
   let timer = null;
   let running = null;
@@ -22,12 +18,12 @@ export const createTseSweep = ({
 
   const run = async () => {
     const due = await findDue({ now: now(), limit: batchSize, maxRetries });
-    for (const { _id: paymentId } of due) {
+    for (const target of due) {
       if (stopping) break;
       try {
-        await sign(paymentId);
+        await sign(target);
       } catch (error) {
-        logger.error({ paymentId: String(paymentId), err: error }, "TSE sweep could not sign a payment");
+        logger.error({ kind: target.kind, id: String(target.id), err: error }, "TSE sweep could not sign");
         captureException(error);
       }
     }

@@ -40,6 +40,54 @@ const ticketSchema = new Schema(
   { _id: false }
 );
 
+export const SIGNATURE_STATUSES = ["PENDING", "SIGNED", "FAILED"];
+
+// One line of a Bestellung as the TSE recorded it; negative in a correction.
+const signedLineSchema = new Schema(
+  {
+    text: { type: String, required: true },
+    quantity: { type: Number, required: true },
+    unitPriceCents: { type: Number, required: true },
+  },
+  { _id: false }
+);
+
+// The TSE's Bestellung transaction for this order (ADR-0003). It is signed
+// after the reply (ADR-0005), so it starts PENDING. Orders of a restaurant
+// without an active TSE, and orders from before signing, have none.
+const orderTseSchema = new Schema(
+  {
+    status: { type: String, enum: SIGNATURE_STATUSES, default: "PENDING" },
+    txId: { type: String },
+    revision: { type: Number },
+    txNumber: { type: Number },
+    signatureCounter: { type: Number },
+    timeEnd: { type: Date },
+    // What the Bestellung records, fixed when its transaction is started.
+    lines: { type: [signedLineSchema], default: undefined },
+    lastError: { type: String },
+    retryCount: { type: Number, default: 0 },
+    nextAttemptAt: { type: Date },
+    // Set while one signer works on the order and its corrections.
+    lockedUntil: { type: Date },
+  },
+  { _id: false }
+);
+
+// A change to a signed order (a cancelled ticket, an edit), signed as its own
+// Bestellung with the difference.
+const tseCorrectionSchema = new Schema({
+  // The cancelled ticket's station; absent for an edit.
+  station: { type: String, enum: STATIONS },
+  status: { type: String, enum: SIGNATURE_STATUSES, default: "PENDING" },
+  lines: { type: [signedLineSchema], default: undefined },
+  txId: { type: String },
+  txNumber: { type: Number },
+  lastError: { type: String },
+  retryCount: { type: Number, default: 0 },
+  nextAttemptAt: { type: Date },
+});
+
 const orderSchema = new Schema(
   {
     restaurantId: {
@@ -69,6 +117,8 @@ const orderSchema = new Schema(
     cancelReason: { type: String },
     cancelledBy: { type: Schema.Types.ObjectId, ref: "Employee" },
     rev: { type: Number, default: 1, min: 1 },
+    tse: { type: orderTseSchema },
+    tseCorrections: { type: [tseCorrectionSchema], default: undefined },
   },
   { timestamps: true }
 );
@@ -79,6 +129,9 @@ orderSchema.index(
 );
 orderSchema.index({ restaurantId: 1, createdAt: -1 });
 orderSchema.index({ restaurantId: 1, sessionId: 1 });
+// The signing sweep looks across restaurants (src/jobs/tseSweep.js).
+orderSchema.index({ "tse.status": 1, "tse.nextAttemptAt": 1 }, { sparse: true });
+orderSchema.index({ "tseCorrections.status": 1 }, { sparse: true });
 orderSchema.plugin(tenantPlugin);
 
 // The orders that make up a session's bill: every one not fully cancelled.

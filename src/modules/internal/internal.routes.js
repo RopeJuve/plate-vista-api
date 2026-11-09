@@ -2,7 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import express from "express";
 import { z } from "zod";
 import { deliverLocal } from "../../realtime/events.js";
-import { SIGN_KINDS, signPaymentLater } from "../tse/signing.service.js";
+import { SIGN_KINDS, signLater } from "../tse/signing.service.js";
 
 const emitSchema = z.object({
   restaurantId: z.string().regex(/^[a-f\d]{24}$/i),
@@ -16,9 +16,9 @@ const emitSchema = z.object({
   }),
 });
 
-// Vercel's ping that a payment waits for its signature (ADR-0005).
+// Vercel's ping that a payment or an order waits for its signature (ADR-0005).
 const signSchema = z.object({
-  kind: z.literal(SIGN_KINDS.PAYMENT),
+  kind: z.enum(Object.values(SIGN_KINDS)),
   id: z.string().regex(/^[a-f\d]{24}$/i),
 });
 
@@ -49,6 +49,6 @@ const internalRoute = (schema, handle) => (req, res) => {
 const internalRouter = express.Router();
 
 internalRouter.post("/emit", internalRoute(emitSchema, deliverLocal));
-internalRouter.post("/sign", internalRoute(signSchema, (body) => signPaymentLater(body.id)));
+internalRouter.post("/sign", internalRoute(signSchema, signLater));
 
 export default internalRouter;

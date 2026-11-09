@@ -116,8 +116,8 @@ test.after(async () => {
 test("cash and card each create a pending payment with a 32-hex receipt token", async () => {
   const requested = [];
   const original = signing.requestSigning;
-  signing.requestSigning = async (paymentId) => {
-    requested.push(String(paymentId));
+  signing.requestSigning = async ({ id }) => {
+    requested.push(String(id));
   };
   try {
     for (const method of ["CASH", "CARD_TERMINAL"]) {
