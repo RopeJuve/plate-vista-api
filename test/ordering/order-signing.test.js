@@ -301,6 +301,26 @@ test("an order cancelled whole before signing is never signed", async () => {
   assert.deepEqual(saved.tseCorrections ?? [], []);
 });
 
+test("an order cancelled whole after its Bestellung was started is finished, then corrected", async () => {
+  const place = await fixture();
+  const placed = await place.order([[place.pizza, 1]]);
+  fake.failNext("finishTx", { status: 503, code: "E_UNAVAILABLE", message: "try later" });
+  await signOrder(placed._id);
+  assert.equal((await stored(place, placed._id)).tse.status, "FAILED");
+  await place.cancel(placed._id);
+  fake.clearCalls();
+
+  await signOrder(placed._id);
+
+  const saved = await stored(place, placed._id);
+  assert.equal(saved.tse.status, "SIGNED");
+  assert.equal(saved.tseCorrections.length, 1);
+  assert.equal(saved.tseCorrections[0].status, "SIGNED");
+  const [bestellung, correction] = finishCalls();
+  assert.deepEqual(lineItemsOf(bestellung), [{ quantity: 1, text: "Pizza", price_per_unit: "12.50" }]);
+  assert.deepEqual(lineItemsOf(correction), [{ quantity: -1, text: "Pizza", price_per_unit: "12.50" }]);
+});
+
 test("a ticket cancelled after signing is signed as a correction of exactly that ticket's lines", async () => {
   const place = await fixture();
   const placed = await place.order([[place.pizza, 2], [place.salad, 1], [place.beer, 3]]);
