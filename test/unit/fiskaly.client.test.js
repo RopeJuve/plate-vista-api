@@ -190,3 +190,32 @@ test("getTss and getClient throw FiskalyError on errors other than 404", async (
   assert.equal((await client.getTss(tssId)).state, "INITIALIZED");
   assert.deepEqual(fake.ops(), ["getTss", "auth", "getTss"]);
 });
+
+test("getTx reads a transaction's state and revision and returns null on 404", async () => {
+  const { fake, client } = setup();
+  const { tssId, clientId } = await activate(client);
+  const txId = randomUUID();
+  await client.startTx(tssId, txId, { clientId });
+  fake.clearCalls();
+
+  const active = await client.getTx(tssId, txId);
+  assert.equal(active._id, txId);
+  assert.equal(active.state, "ACTIVE");
+  assert.equal(active.revision, 1);
+  assert.deepEqual(
+    fake.calls.map(({ op, method, path }) => `${op} ${method} ${path}`),
+    [`getTx GET /tss/${tssId}/tx/${txId}`]
+  );
+
+  await client.finishTx(tssId, txId, { clientId });
+  const finished = await client.getTx(tssId, txId);
+  assert.equal(finished.state, "FINISHED");
+  assert.equal(finished.revision, 2);
+  assert.ok(finished.signature.value);
+
+  assert.equal(await client.getTx(tssId, randomUUID()), null);
+  fake.failNext("getTx", { status: 500 });
+  const error = await client.getTx(tssId, txId).catch((caught) => caught);
+  assert.ok(error instanceof FiskalyError);
+  assert.equal(error.status, 500);
+});
