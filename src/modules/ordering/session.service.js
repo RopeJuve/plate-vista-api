@@ -7,6 +7,7 @@ import Payment from "../payments/payment.model.js";
 import { AppError, duplicateKeyOn } from "../../shared/errors.js";
 import { publish } from "../../realtime/events.js";
 import { serializeOrder, serializeSession } from "./serialize.js";
+import { serializePayment } from "../payments/serialize.js";
 
 // Short code guests read to each other at the table. No 0/O or 1/I.
 const newJoinCode = customAlphabet("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", 4);
@@ -195,12 +196,15 @@ export const getBoard = async (restaurantId) => {
       .lean(),
   ]);
   const sessionIds = sessions.map((session) => session._id);
-  const [orders, tables, closedTotals] = await Promise.all([
+  const [orders, payments, tables, closedTotals] = await Promise.all([
     Order.find({
       restaurantId,
       sessionId: { $in: sessionIds },
       status: { $ne: "cancelled" },
     }).lean(),
+    // One query for every open session's payment, so a reloaded board knows
+    // which tables have paid.
+    Payment.find({ restaurantId, sessionId: { $in: sessionIds } }).lean(),
     // Every table: the floor plan shows free tables too, not only seated ones.
     Table.find({ restaurantId })
       .select("tableNumber capacity status qrCode")
@@ -210,11 +214,13 @@ export const getBoard = async (restaurantId) => {
   const tableById = new Map(tables.map((table) => [String(table._id), table]));
   const tableNumberOf = (session) => tableById.get(String(session.tableId))?.tableNumber ?? null;
   const openTableIds = new Set(sessions.map((session) => String(session.tableId)));
+  const paymentBySession = new Map(payments.map((payment) => [String(payment.sessionId), payment]));
   return {
     // Staff see the join code so a waiter can tell guests who scan late.
     sessions: sessions.map((session) => ({
       ...serializeSession(session, tableNumberOf(session)),
       joinCode: session.code,
+      payment: serializePayment(paymentBySession.get(String(session._id))),
     })),
     // Closed sessions keep their orders; fetch them with GET /sessions/:id/bill.
     recentlyClosed: closed.map((session) => ({

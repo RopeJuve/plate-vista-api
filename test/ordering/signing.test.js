@@ -13,6 +13,8 @@ import { connectToDatabase, disconnectDatabase } from "../../src/db/db.js";
 import { cancelOrder, createOrder } from "../../src/modules/ordering/order.service.js";
 import { recordPayment } from "../../src/modules/payments/payment.service.js";
 import { signing } from "../../src/modules/payments/signing.js";
+import { paymentEvents } from "../../src/modules/payments/events.js";
+import { clearPublished, published } from "../../src/realtime/events.js";
 import Payment from "../../src/modules/payments/payment.model.js";
 import MenuItem from "../../src/modules/menu/menuItem.model.js";
 import Table from "../../src/modules/tables/table.model.js";
@@ -466,4 +468,88 @@ test("POST /internal/sign needs the internal secret and signs the payment", asyn
     .send({ kind: "PAYMENT", id: payment.id });
   assert.equal(ok.status, 202);
   await waitFor(async () => (await stored(place, payment.id)).tse.status === "SIGNED");
+});
+
+const signingEvents = () =>
+  published.filter((entry) => ["payment.signed", "payment.signFailed"].includes(entry.message?.event));
+
+test("signing a payment publishes payment.signed to the staff and the session", async () => {
+  const place = await fixture();
+  const placed = await place.order([[place.pizza, 1]]);
+  const payment = await place.pay(placed.sessionId, "CASH", 1250);
+  clearPublished();
+
+  await signPayment(payment.id);
+
+  const envelopes = signingEvents();
+  assert.equal(envelopes.length, 1);
+  const [envelope] = envelopes;
+  assert.equal(String(envelope.restaurantId), String(place.restaurant._id));
+  assert.equal(String(envelope.sessionId), placed.sessionId);
+  assert.equal(envelope.audience, undefined);
+  assert.deepEqual(envelope.message, {
+    type: "event",
+    event: "payment.signed",
+    data: { paymentId: payment.id, receiptToken: payment.receiptToken },
+  });
+});
+
+test("the sweep signing a payment publishes payment.signed too", async () => {
+  const place = await fixture();
+  const placed = await place.order([[place.beer, 1]]);
+  const payment = await place.pay(placed.sessionId, "CARD_TERMINAL", 420);
+  clearPublished();
+
+  await createTseSweep().runOnce();
+
+  assert.deepEqual(
+    signingEvents().map((entry) => [entry.message.event, entry.message.data.paymentId]),
+    [["payment.signed", payment.id]]
+  );
+});
+
+test("a failed signing attempt publishes payment.signFailed to the staff only", async () => {
+  const place = await fixture();
+  const placed = await place.order([[place.pizza, 1]]);
+  const payment = await place.pay(placed.sessionId, "CASH", 1250);
+  fake.failNext("finishTx", { status: 503, code: "E_UNAVAILABLE", message: "try later" });
+  clearPublished();
+
+  await signPayment(payment.id);
+
+  const envelopes = signingEvents();
+  assert.equal(envelopes.length, 1);
+  const [envelope] = envelopes;
+  assert.equal(String(envelope.restaurantId), String(place.restaurant._id));
+  assert.equal(envelope.audience, "staff");
+  assert.deepEqual(envelope.message, {
+    type: "event",
+    event: "payment.signFailed",
+    data: { paymentId: payment.id },
+  });
+});
+
+test("a throwing publish does not break signing, whether it succeeds or fails", async () => {
+  const original = paymentEvents.publish;
+  paymentEvents.publish = () => {
+    throw new Error("socket server down");
+  };
+  try {
+    const place = await fixture();
+    const placed = await place.order([[place.pizza, 1]]);
+    const payment = await place.pay(placed.sessionId, "CASH", 1250);
+
+    fake.failNext("finishTx", { status: 503, code: "E_UNAVAILABLE", message: "try later" });
+    const failed = await signPayment(payment.id);
+    assert.equal(failed.tse.status, "FAILED");
+
+    await Payment.updateOne(
+      { _id: payment.id, restaurantId: place.restaurant._id },
+      { $unset: { "tse.nextAttemptAt": 1 } }
+    );
+    const signed = await signPayment(payment.id);
+    assert.equal(signed.tse.status, "SIGNED");
+  } finally {
+    paymentEvents.publish = original;
+  }
 });

@@ -21,6 +21,9 @@ import TableSession from "../../src/modules/ordering/session.model.js";
 import Payment from "../../src/modules/payments/payment.model.js";
 import { stock } from "../../src/modules/ordering/stock.js";
 import { signing } from "../../src/modules/payments/signing.js";
+import { paymentEvents } from "../../src/modules/payments/events.js";
+import { clearPublished, published } from "../../src/realtime/events.js";
+import mongoose from "mongoose";
 import MenuItem from "../../src/modules/menu/menuItem.model.js";
 import Table from "../../src/modules/tables/table.model.js";
 import Employee from "../../src/modules/staff/employee.model.js";
@@ -384,4 +387,123 @@ test("an order racing a payment is rejected with BILL_PAID instead of landing on
   assert.equal(paid.status, 201, JSON.stringify(paid.body));
   assert.equal(paid.body.amountCents, 1000);
   assert.equal(await Order.countDocuments({ restaurantId: place.restaurant._id }), 1);
+});
+
+const paymentEnvelopes = () =>
+  published.filter((entry) => ["bill.paid", "payment.signed", "payment.signFailed"].includes(entry.message?.event));
+
+test("paying publishes one bill.paid to the staff and the session, and a replay publishes none", async () => {
+  const place = await fixture();
+  const placed = await place.order(2);
+  const clientPaymentId = randomUUID();
+  clearPublished();
+  const res = await pay(place, placed.sessionId, { clientPaymentId, expectedTotalCents: 2000 });
+  assert.equal(res.status, 201);
+
+  const envelopes = paymentEnvelopes();
+  assert.equal(envelopes.length, 1);
+  const [envelope] = envelopes;
+  assert.equal(String(envelope.restaurantId), String(place.restaurant._id));
+  assert.equal(String(envelope.sessionId), placed.sessionId);
+  assert.equal(envelope.audience, undefined);
+  assert.deepEqual(envelope.message, {
+    type: "event",
+    event: "bill.paid",
+    data: {
+      sessionId: placed.sessionId,
+      paymentId: res.body.id,
+      receiptToken: res.body.receiptToken,
+      method: "CASH",
+      totalCents: 2000,
+    },
+  });
+
+  clearPublished();
+  const again = await pay(place, placed.sessionId, { clientPaymentId, expectedTotalCents: 2000 });
+  assert.equal(again.status, 200);
+  assert.equal(paymentEnvelopes().length, 0);
+});
+
+test("a throwing publish does not fail the payment", async () => {
+  const original = paymentEvents.publish;
+  paymentEvents.publish = () => {
+    throw new Error("socket server down");
+  };
+  try {
+    const place = await fixture();
+    const placed = await place.order(1);
+    const res = await pay(place, placed.sessionId, { expectedTotalCents: 1000 });
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    assert.equal(await Payment.countDocuments({ restaurantId: place.restaurant._id }), 1);
+  } finally {
+    paymentEvents.publish = original;
+  }
+});
+
+test("the staff board carries each open session's payment, or null while unpaid", async () => {
+  const place = await fixture();
+  const second = await Table.create({ restaurantId: place.restaurant._id, tableNumber: 2, capacity: 2 });
+  const paidOrder = await place.order(2);
+  const unpaid = await createOrder(place.ctx(), {
+    clientOrderId: randomUUID(),
+    tableId: String(second._id),
+    items: [{ productId: String(place.item._id), quantity: 1 }],
+  });
+  const before = await place.as()("get", "/staff/board");
+  assert.equal(before.status, 200);
+
+  const paid = await pay(place, paidOrder.sessionId, { expectedTotalCents: 2000 });
+  assert.equal(paid.status, 201);
+
+  const board = await place.as()("get", "/staff/board");
+  assert.equal(board.status, 200);
+  const sessionOf = (body, id) => body.sessions.find((session) => session._id === id);
+  const bill = await place.as()("get", `/sessions/${paidOrder.sessionId}/bill`);
+  assert.deepEqual(sessionOf(board.body, paidOrder.sessionId).payment, bill.body.payment);
+  assert.equal(sessionOf(board.body, paidOrder.sessionId).payment.signature.status, "PENDING");
+  assert.equal(sessionOf(board.body, unpaid.order.sessionId).payment, null);
+
+  // Nothing else on the board changes.
+  const withoutPayment = (body) => ({
+    ...body,
+    sessions: body.sessions.map(({ payment, ...session }) => session),
+  });
+  assert.deepEqual(withoutPayment(board.body), withoutPayment(before.body));
+
+  await Payment.updateOne(
+    { _id: paid.body.id, restaurantId: place.restaurant._id },
+    { $set: { "tse.status": "SIGNED" } }
+  );
+  const signed = await place.as()("get", "/staff/board");
+  const signedBill = await place.as()("get", `/sessions/${paidOrder.sessionId}/bill`);
+  assert.equal(sessionOf(signed.body, paidOrder.sessionId).payment.signature.status, "SIGNED");
+  assert.deepEqual(sessionOf(signed.body, paidOrder.sessionId).payment, signedBill.body.payment);
+});
+
+test("the staff board loads payments with one query, whatever the number of open sessions", async () => {
+  const place = await fixture();
+  for (let number = 2; number <= 4; number += 1) {
+    const table = await Table.create({ restaurantId: place.restaurant._id, tableNumber: number, capacity: 2 });
+    await createOrder(place.ctx(), {
+      clientOrderId: randomUUID(),
+      tableId: String(table._id),
+      items: [{ productId: String(place.item._id), quantity: 1 }],
+    });
+  }
+  const placed = await place.order(1);
+  assert.equal((await pay(place, placed.sessionId, { expectedTotalCents: 1000 })).status, 201);
+
+  const queries = [];
+  mongoose.set("debug", (collection, method) => {
+    if (collection === Payment.collection.collectionName) queries.push(method);
+  });
+  let board;
+  try {
+    board = await place.as()("get", "/staff/board");
+  } finally {
+    mongoose.set("debug", false);
+  }
+  assert.equal(board.status, 200);
+  assert.equal(board.body.sessions.length, 4);
+  assert.equal(queries.length, 1, JSON.stringify(queries));
 });

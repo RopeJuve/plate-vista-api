@@ -86,6 +86,7 @@ POST /sessions/:id/payments
   -> 404
 
 GET /sessions/:id/bill (existing)  + payment: Payment | null
+GET /staff/board (existing)        sessions[] + payment: Payment | null   (PROTOCOL 2.4)
 ```
 
 ```ts

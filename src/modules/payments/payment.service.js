@@ -4,6 +4,7 @@ import Restaurant from "../restaurants/restaurant.model.js";
 import { serializePayment } from "./serialize.js";
 import { recordPaymentSchema } from "./payment.schemas.js";
 import { requestSigning } from "./signing.js";
+import { publishBillPaid } from "./events.js";
 import { isTseActive } from "../tse/tse.service.js";
 import { getSessionBill } from "../ordering/order.service.js";
 import { findSession, touchSession } from "../ordering/session.service.js";
@@ -92,6 +93,7 @@ export const recordPayment = async (ctx, sessionId, input) => {
   }
 
   if (!result.replayed) {
+    publishBillPaid(result.payment);
     try {
       await requestSigning({ kind: "PAYMENT", id: result.payment._id });
     } catch (error) {
