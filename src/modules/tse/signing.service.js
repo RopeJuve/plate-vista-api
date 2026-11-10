@@ -1,6 +1,6 @@
+import mongoose from "mongoose";
 import Payment, { SIGNATURE_STATUSES } from "../payments/payment.model.js";
 import { getBillLines } from "../ordering/order.service.js";
-import mongoose from "mongoose";
 import { findDueOrders, isOrderSigned, resetFailedOrder, signOrder } from "../ordering/order.signing.js";
 import { centsToDecimal, totalsByVat } from "../payments/money.js";
 import { publishPaymentSigned, publishPaymentSignFailed } from "../payments/events.js";
