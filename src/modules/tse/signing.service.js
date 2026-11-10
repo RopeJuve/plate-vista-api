@@ -2,6 +2,7 @@ import Payment, { SIGNATURE_STATUSES } from "../payments/payment.model.js";
 import { getBillLines } from "../ordering/order.service.js";
 import { findDueOrders, signOrder } from "../ordering/order.signing.js";
 import { centsToDecimal, totalsByVat } from "../payments/money.js";
+import { publishPaymentSigned, publishPaymentSignFailed } from "../payments/events.js";
 import { captureException, logger } from "../../shared/logger.js";
 import {
   failureFields,
@@ -115,7 +116,7 @@ export const signPayment = async (paymentId) => {
       schema: () => schema,
     });
 
-    return await saveOutcome({
+    const signed = await saveOutcome({
       $set: tseFields({
         status: "SIGNED",
         revision: tx.revision,
@@ -130,6 +131,8 @@ export const signPayment = async (paymentId) => {
       }),
       $unset: tseFields({ lockedUntil: 1, lastError: 1, nextAttemptAt: 1 }),
     });
+    if (signed) publishPaymentSigned(signed);
+    return signed;
   } catch (error) {
     const permanent = isPermanent(error);
     const failed = failureFields(error, payment.tse?.retryCount);
@@ -145,10 +148,12 @@ export const signPayment = async (paymentId) => {
     if (permanent) logger.error(fields, "payment signing failed for good; a person has to look");
     else logger.warn(fields, "payment signing failed");
     if (permanent || !isExpected(error)) captureException(error);
-    return saveOutcome({
+    const saved = await saveOutcome({
       $set: tseFields(failed),
       $unset: tseFields({ lockedUntil: 1 }),
     });
+    if (saved) publishPaymentSignFailed(saved);
+    return saved;
   }
 };
 
