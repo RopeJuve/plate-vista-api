@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import Order from "./order.model.js";
 import { linesOnActiveTickets, ticketsOf } from "./tickets.js";
 import { centsToDecimal } from "../payments/money.js";
@@ -284,4 +285,76 @@ export const findDueOrders = ({ now = new Date(), limit = 50, maxRetries = MAX_A
     .select("_id")
     .setOptions({ skipTenant: true })
     .lean();
+};
+
+// Failed signatures of one restaurant's orders, for the owner (#29): a
+// failed Bestellung and every failed correction count on their own.
+export const countFailedOrderSignatures = async (restaurantId) => {
+  const restaurant = new mongoose.Types.ObjectId(String(restaurantId));
+  const [bestellungen, corrections] = await Promise.all([
+    Order.countDocuments({ restaurantId: restaurant, "tse.status": "FAILED" }),
+    Order.aggregate([
+      { $match: { restaurantId: restaurant, "tseCorrections.status": "FAILED" } },
+      { $unwind: "$tseCorrections" },
+      { $match: { "tseCorrections.status": "FAILED" } },
+      { $count: "count" },
+    ]),
+  ]);
+  return bestellungen + (corrections[0]?.count || 0);
+};
+
+const centsOf = (lines = []) => lines.reduce((sum, line) => sum + line.quantity * line.unitPriceCents, 0);
+
+// Each failed Bestellung or correction as `{ id, tableId, at, amountCents,
+// error, retryCount }`; a correction carries its order's id and is as old as
+// the correction itself, its amount negative for what was taken off.
+export const listFailedOrderSignatures = async (restaurantId) => {
+  const orders = await Order.find({
+    restaurantId,
+    $or: [{ "tse.status": "FAILED" }, { "tseCorrections.status": "FAILED" }],
+  })
+    .select("tableId createdAt items tickets tse.status tse.lines tse.lastError tse.retryCount tseCorrections")
+    .lean();
+  const failed = [];
+  for (const order of orders) {
+    const entry = (at, amountCents, { lastError, retryCount }) =>
+      failed.push({ id: order._id, tableId: order.tableId, at, amountCents, error: lastError, retryCount });
+    if (order.tse?.status === "FAILED") {
+      entry(order.createdAt, centsOf(order.tse.lines || linesToSign(order)), order.tse);
+    }
+    for (const correction of order.tseCorrections || []) {
+      if (correction.status === "FAILED") entry(correction.createdAt || correction._id.getTimestamp(), centsOf(correction.lines), correction);
+    }
+  }
+  return failed;
+};
+
+// Puts a failed order's Bestellung and failed corrections back under the
+// automatic retry limit. False when the order has nothing failed.
+export const resetFailedOrder = async (restaurantId, orderId) => {
+  const order = await Order.findOne({
+    _id: orderId,
+    restaurantId,
+    $or: [{ "tse.status": "FAILED" }, { "tseCorrections.status": "FAILED" }],
+  })
+    .select("tse.status tseCorrections.status")
+    .lean();
+  if (!order) return false;
+  const $set = {};
+  if (order.tse?.status === "FAILED") $set["tse.retryCount"] = 0;
+  const correctionFailed = (order.tseCorrections || []).some((entry) => entry.status === "FAILED");
+  if (correctionFailed) $set["tseCorrections.$[failed].retryCount"] = 0;
+  await Order.updateOne(
+    { _id: orderId, restaurantId },
+    { $set },
+    correctionFailed ? { arrayFilters: [{ "failed.status": "FAILED" }] } : {}
+  );
+  return true;
+};
+
+// Whether everything of the order the TSE has to record is signed.
+export const isOrderSigned = async (restaurantId, orderId) => {
+  const order = await Order.findOne({ _id: orderId, restaurantId }).select("tse.status tseCorrections.status").lean();
+  if (!order?.tse) return Boolean(order);
+  return order.tse.status === "SIGNED" && (order.tseCorrections || []).every((entry) => entry.status === "SIGNED");
 };

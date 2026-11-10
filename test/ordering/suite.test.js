@@ -2146,6 +2146,8 @@ const AUTHENTICATED_ROUTES = [
   "PUT /api/v1/restaurant/legal",
   "GET /api/v1/tse",
   "POST /api/v1/tse/setup",
+  "GET /api/v1/tse/failed",
+  "POST /api/v1/tse/failed/:kind/:id/retry",
 ];
 
 const joinPath = (prefix, path) => {
@@ -2385,6 +2387,21 @@ test("cross-tenant lists, creates, stats, public menu, and sockets stay inside r
   assert.equal(aTseSetup.body.code, "INTERNAL");
   assert.equal(JSON.stringify(aTseSetup.body).includes(tag), false);
   assert.equal((await Restaurant.findById(b.restaurant._id).lean()).tse.tssSerial, `b-serial-${tag}`);
+  // B's failed signature is neither counted, listed nor retried for A.
+  await Order.updateOne(
+    { _id: orderB.order._id, restaurantId: b.restaurant._id },
+    { $set: { tse: { status: "FAILED", retryCount: 20, lastError: `b-error-${tag}` } } }
+  );
+  assert.equal((await asA("get", "/api/v1/tse")).body.failedSignatures, 0);
+  const aFailed = await asA("get", "/api/v1/tse/failed");
+  cover("GET", "/api/v1/tse/failed");
+  assert.equal(aFailed.status, 200);
+  assert.deepEqual(aFailed.body, { items: [] });
+  const aRetry = await asA("post", `/api/v1/tse/failed/ORDER/${orderB.order._id}/retry`);
+  cover("POST", "/api/v1/tse/failed/:kind/:id/retry");
+  assert.equal(aRetry.status, 404);
+  const bFailedNow = await Order.findOne({ _id: orderB.order._id, restaurantId: b.restaurant._id }).lean();
+  assert.equal(bFailedNow.tse.retryCount, 20);
   const bCategoryNow = await Category.findOne({ _id: bCategory._id, restaurantId: b.restaurant._id });
   assert.equal(bCategoryNow.name, `B-only ${tag}`);
   const intoB = await asA("post", "/api/v1/menu-items").send({

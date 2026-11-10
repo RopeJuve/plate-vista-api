@@ -1,6 +1,7 @@
+import mongoose from "mongoose";
 import Payment, { SIGNATURE_STATUSES } from "../payments/payment.model.js";
 import { getBillLines } from "../ordering/order.service.js";
-import { findDueOrders, signOrder } from "../ordering/order.signing.js";
+import { findDueOrders, isOrderSigned, resetFailedOrder, signOrder } from "../ordering/order.signing.js";
 import { centsToDecimal, totalsByVat } from "../payments/money.js";
 import { publishPaymentSigned, publishPaymentSignFailed } from "../payments/events.js";
 import { captureException, logger } from "../../shared/logger.js";
@@ -162,6 +163,30 @@ export const sign = ({ kind, id }) => {
   if (kind === SIGN_KINDS.PAYMENT) return signPayment(id);
   if (kind === SIGN_KINDS.ORDER) return signOrder(id);
   throw new Error(`Unknown signing kind ${kind}`);
+};
+
+// The owner pushes a failed signature through by hand (#29): its retry count
+// goes back to 0 first, so the sweep picks it up again if this attempt fails
+// too, then it is signed straight away. Returns "SIGNED" or "FAILED", or null
+// when the restaurant has no such failed signature.
+export const retryFailedSignature = async (restaurantId, { kind, id }) => {
+  if (!mongoose.Types.ObjectId.isValid(String(id))) return null;
+  if (kind === SIGN_KINDS.PAYMENT) {
+    const reset = await Payment.updateOne(
+      { _id: id, restaurantId, "tse.status": "FAILED" },
+      { $set: { "tse.retryCount": 0 } }
+    );
+    if (!reset.matchedCount) return null;
+    await signPayment(id);
+    const payment = await Payment.findOne({ _id: id, restaurantId }).select("tse.status").lean();
+    return payment?.tse?.status === "SIGNED" ? "SIGNED" : "FAILED";
+  }
+  if (kind === SIGN_KINDS.ORDER) {
+    if (!(await resetFailedOrder(restaurantId, id))) return null;
+    await signOrder(id);
+    return (await isOrderSigned(restaurantId, id)) ? "SIGNED" : "FAILED";
+  }
+  return null;
 };
 
 // Signs after the current request has replied; a failure only logs, and the
