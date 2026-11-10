@@ -31,6 +31,15 @@ const ROUTES = [
   ["GET", /^\/tss\/([^/]+)\/tx\/([^/]+)$/, "getTx"],
 ];
 
+// fiskaly's parser wants every order line item value as a string, as the
+// real API does (#58).
+const parserErrors = (schema) =>
+  (schema?.standard_v1?.order?.line_items || []).flatMap((item, i) =>
+    ["quantity", "text", "price_per_unit"]
+      .filter((field) => typeof item[field] !== "string")
+      .map((field) => `line_items.${i}.${field}: Invalid type. Expected: string, given: ${typeof item[field] === "number" ? "integer" : typeof item[field]}`)
+  );
+
 const TX_OPS = { ACTIVE: "startTx", FINISHED: "finishTx", CANCELLED: "cancelTx" };
 
 export const createFakeFiskaly = ({
@@ -173,6 +182,8 @@ export const createFakeFiskaly = ({
       const revision = Number(url.searchParams.get("tx_revision"));
       const existing = tss.transactions.get(txId);
       const timestamp = Math.floor(now() / 1000);
+      const errors = parserErrors(body.schema);
+      if (errors.length) return fail(400, "E_PARSER", `error parsing request body:\n${errors.join("\n")}\n`);
       if (body.state === "ACTIVE" && !existing) {
         if (revision !== 1) return fail(400, "E_TX_REVISION", "First revision must be 1");
         tss.txNumber += 1;

@@ -83,11 +83,13 @@ export const correctionFor = (order, { station } = {}) => {
 export const dropsSignature = (order) =>
   Boolean(order.tse) && order.tse.status !== "SIGNED" && !order.tse.txId && linesToSign(order).length === 0;
 
-const orderSchema = (lines) => ({
+// fiskaly reads every line item value as a string, the quantity included;
+// a number is rejected with E_PARSER (#58).
+export const orderSchema = (lines) => ({
   standard_v1: {
     order: {
       line_items: lines.map((line) => ({
-        quantity: line.quantity,
+        quantity: String(line.quantity),
         text: line.text,
         price_per_unit: centsToDecimal(line.unitPriceCents),
       })),
