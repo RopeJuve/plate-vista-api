@@ -44,25 +44,25 @@ export const fiskaly = () => {
 // The TSE can sign once setup has run to the end.
 export const isTseActive = (restaurant) => restaurant?.tse?.setupStep === "DONE";
 
-export const serializeTseStatus = (restaurant) => {
+export const serializeTseStatus = (restaurant, { failedSignatures = 0 } = {}) => {
   const tse = restaurant?.tse || {};
-  if (!isTseActive(restaurant)) return { active: false, failedSignatures: 0 };
+  if (!isTseActive(restaurant)) return { active: false, failedSignatures };
   return {
     active: true,
     tssSerial: tse.tssSerial,
     clientId: tse.clientId,
     setupAt: tse.setupAt ? new Date(tse.setupAt).toISOString() : null,
-    // Filled in by the signing retry work (#29).
-    failedSignatures: 0,
+    failedSignatures,
   };
 };
 
 const notFound = () => new AppError("NOT_FOUND", "Restaurant not found");
 
-export const getTseStatus = async (restaurantId) => {
+// `failedSignatures` is counted by the caller (src/modules/tse/failedSignatures.js).
+export const getTseStatus = async (restaurantId, { failedSignatures = 0 } = {}) => {
   const restaurant = await Restaurant.findById(restaurantId).select("tse").lean();
   if (!restaurant) throw notFound();
-  return serializeTseStatus(restaurant);
+  return serializeTseStatus(restaurant, { failedSignatures });
 };
 
 // fiskaly answered and said no (wrong PIN, not logged in), as opposed to

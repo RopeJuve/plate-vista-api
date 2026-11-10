@@ -86,6 +86,8 @@ const tseCorrectionSchema = new Schema({
   lastError: { type: String },
   retryCount: { type: Number, default: 0 },
   nextAttemptAt: { type: Date },
+  // When the change was made; older corrections fall back to their _id's time.
+  createdAt: { type: Date, default: Date.now },
 });
 
 const orderSchema = new Schema(
