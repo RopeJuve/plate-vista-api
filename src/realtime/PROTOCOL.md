@@ -1,10 +1,14 @@
-# WebSocket protocol v2.3
+# WebSocket protocol v2.4
 
 Orders change only through this socket. REST reads the current board; it does not create or edit orders.
 
-This release is **2.3**. Clients connect with `/ws?v=2`. A missing `v` defaults to `2`. An unknown version is closed with code `4000` and reason `unsupported protocol version`.
+This release is **2.4**. Clients connect with `/ws?v=2`. A missing `v` defaults to `2`. An unknown version is closed with code `4000` and reason `unsupported protocol version`.
 
 ## Changelog
+
+### 2.4
+
+- `GET /api/v1/staff/board`: each entry in `sessions` has `payment`, the same `Payment` as `GET /sessions/:id/bill`, or `null` while unpaid. A board loaded after `bill.paid` or `payment.signed` fired shows the table as paid and the signature's status.
 
 ### 2.3
 
@@ -129,7 +133,7 @@ Staff snapshot of open sessions and their non-cancelled orders. Order objects ar
 
 ```jsonc
 {
-  "sessions": [/* Session + "joinCode": "K7QM" */],
+  "sessions": [/* Session + "joinCode": "K7QM" + "payment": {/* Payment */} | null */],
   "recentlyClosed": [/* Session + "totalCents": 1800 — closed in the last 12 hours, newest first, max 50 */],
   "orders": [/* Order — open sessions only */],
   "tables": [{
@@ -141,6 +145,8 @@ Staff snapshot of open sessions and their non-cancelled orders. Order objects ar
   }]
 }
 ```
+
+`payment` (2.4) on an open session is `null` until its bill is paid, then the same `Payment` as `GET /sessions/:id/bill`, including `signature.status` (`PENDING` until the TSE signs it, then `SIGNED`). Use it to show a table as paid when the board loads; `bill.paid` and `payment.signed` keep it current afterwards. `recentlyClosed` has no `payment`.
 
 ### GET /api/v1/sessions/:id/bill
 
