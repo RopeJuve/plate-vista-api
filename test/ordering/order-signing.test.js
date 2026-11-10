@@ -168,8 +168,8 @@ test("a new order is PENDING, asks for its signature, and is signed as a Bestell
   assert.equal(saved.tse.status, "SIGNED");
   assert.deepEqual(fake.ops({ withAuth: false }), ["startTx", "finishTx"]);
   assert.deepEqual(lineItemsOf(finishCalls()[0]), [
-    { quantity: 2, text: "Pizza", price_per_unit: "12.50" },
-    { quantity: 1, text: "Beer", price_per_unit: "4.50" },
+    { quantity: "2", text: "Pizza", price_per_unit: "12.50" },
+    { quantity: "1", text: "Beer", price_per_unit: "4.50" },
   ]);
   const tx = txOf(place, saved.tse.txId);
   assert.equal(tx.state, "FINISHED");
@@ -253,7 +253,7 @@ test("with fiskaly down the order still works through the kitchen, and the sweep
   await createTseSweep({ now: () => new Date(Date.now() + 31_000) }).runOnce();
   saved = await stored(place, placed._id);
   assert.equal(saved.tse.status, "SIGNED");
-  assert.deepEqual(lineItemsOf(finishCalls()[0]), [{ quantity: 1, text: "Pizza", price_per_unit: "12.50" }]);
+  assert.deepEqual(lineItemsOf(finishCalls()[0]), [{ quantity: "1", text: "Pizza", price_per_unit: "12.50" }]);
 });
 
 test("after 20 failures the order is no longer retried automatically", async () => {
@@ -282,7 +282,7 @@ test("a ticket cancelled before signing is left out of the Bestellung, with no c
 
   const saved = await stored(place, placed._id);
   assert.equal(saved.tse.status, "SIGNED");
-  assert.deepEqual(lineItemsOf(finishCalls()[0]), [{ quantity: 1, text: "Pizza", price_per_unit: "12.50" }]);
+  assert.deepEqual(lineItemsOf(finishCalls()[0]), [{ quantity: "1", text: "Pizza", price_per_unit: "12.50" }]);
   assert.deepEqual(saved.tseCorrections ?? [], []);
 });
 
@@ -317,8 +317,8 @@ test("an order cancelled whole after its Bestellung was started is finished, the
   assert.equal(saved.tseCorrections.length, 1);
   assert.equal(saved.tseCorrections[0].status, "SIGNED");
   const [bestellung, correction] = finishCalls();
-  assert.deepEqual(lineItemsOf(bestellung), [{ quantity: 1, text: "Pizza", price_per_unit: "12.50" }]);
-  assert.deepEqual(lineItemsOf(correction), [{ quantity: -1, text: "Pizza", price_per_unit: "12.50" }]);
+  assert.deepEqual(lineItemsOf(bestellung), [{ quantity: "1", text: "Pizza", price_per_unit: "12.50" }]);
+  assert.deepEqual(lineItemsOf(correction), [{ quantity: "-1", text: "Pizza", price_per_unit: "12.50" }]);
 });
 
 test("a ticket cancelled after signing is signed as a correction of exactly that ticket's lines", async () => {
@@ -343,8 +343,8 @@ test("a ticket cancelled after signing is signed as a correction of exactly that
   assert.equal(correction.status, "SIGNED");
   assert.deepEqual(fake.ops({ withAuth: false }), ["startTx", "finishTx"]);
   assert.deepEqual(lineItemsOf(finishCalls()[0]), [
-    { quantity: -2, text: "Pizza", price_per_unit: "12.50" },
-    { quantity: -1, text: "Salad", price_per_unit: "8.50" },
+    { quantity: "-2", text: "Pizza", price_per_unit: "12.50" },
+    { quantity: "-1", text: "Salad", price_per_unit: "8.50" },
   ]);
   const tx = txOf(place, correction.txId);
   assert.equal(tx.state, "FINISHED");
@@ -365,8 +365,8 @@ test("an edit after signing is signed as a correction for the difference", async
   assert.equal(saved.tseCorrections.length, 1);
   assert.equal(saved.tseCorrections[0].status, "SIGNED");
   assert.deepEqual(lineItemsOf(finishCalls()[0]), [
-    { quantity: -1, text: "Pizza", price_per_unit: "12.50" },
-    { quantity: 1, text: "Salad", price_per_unit: "8.50" },
+    { quantity: "-1", text: "Pizza", price_per_unit: "12.50" },
+    { quantity: "1", text: "Salad", price_per_unit: "8.50" },
   ]);
 });
 
@@ -378,7 +378,7 @@ test("an edit before signing changes what the Bestellung signs", async () => {
 
   await signOrder(placed._id);
 
-  assert.deepEqual(lineItemsOf(finishCalls()[0]), [{ quantity: 1, text: "Beer", price_per_unit: "4.50" }]);
+  assert.deepEqual(lineItemsOf(finishCalls()[0]), [{ quantity: "1", text: "Beer", price_per_unit: "4.50" }]);
   assert.deepEqual((await stored(place, placed._id)).tseCorrections ?? [], []);
 });
 
@@ -406,7 +406,7 @@ test("a failed correction backs off and the sweep signs it later", async () => {
   await createTseSweep({ now: () => new Date(Date.now() + 31_000) }).runOnce();
   [correction] = (await stored(place, placed._id)).tseCorrections;
   assert.equal(correction.status, "SIGNED");
-  assert.deepEqual(lineItemsOf(finishCalls()[0]), [{ quantity: -1, text: "Beer", price_per_unit: "4.50" }]);
+  assert.deepEqual(lineItemsOf(finishCalls()[0]), [{ quantity: "-1", text: "Beer", price_per_unit: "4.50" }]);
 });
 
 test("a cancel while the order is being signed still ends in a correction, once", async () => {
@@ -434,10 +434,10 @@ test("a cancel while the order is being signed still ends in a correction, once"
   assert.equal(saved.tseCorrections[0].status, "SIGNED");
   const finishes = finishCalls();
   assert.deepEqual(lineItemsOf(finishes[0]), [
-    { quantity: 1, text: "Pizza", price_per_unit: "12.50" },
-    { quantity: 1, text: "Beer", price_per_unit: "4.50" },
+    { quantity: "1", text: "Pizza", price_per_unit: "12.50" },
+    { quantity: "1", text: "Beer", price_per_unit: "4.50" },
   ]);
-  assert.deepEqual(lineItemsOf(finishes[1]), [{ quantity: -1, text: "Beer", price_per_unit: "4.50" }]);
+  assert.deepEqual(lineItemsOf(finishes[1]), [{ quantity: "-1", text: "Beer", price_per_unit: "4.50" }]);
 });
 
 test("orders from before signing existed are never signed", async () => {
