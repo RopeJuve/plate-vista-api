@@ -7,14 +7,15 @@ import mongoose from "mongoose";
 export const migrateDropMenuPrice = async ({ dryRun = false } = {}) => {
   const items = mongoose.connection.db.collection("menuitems");
   const legacy = await items.find({ price: { $exists: true } }).toArray();
-  const missingCents = legacy.filter((item) => item.priceCents == null);
+  const needsCents = (item) => item.priceCents == null && Number.isFinite(item.price);
+  const missingCents = legacy.filter(needsCents);
   if (!dryRun && legacy.length > 0) {
     await items.bulkWrite(
       legacy.map((item) => ({
         updateOne: {
           filter: { _id: item._id, price: { $exists: true } },
           update: {
-            ...(item.priceCents == null && { $set: { priceCents: Math.round(item.price * 100) } }),
+            ...(needsCents(item) && { $set: { priceCents: Math.round(item.price * 100) } }),
             $unset: { price: "" },
           },
         },
