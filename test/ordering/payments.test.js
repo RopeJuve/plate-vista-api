@@ -65,7 +65,6 @@ const fixture = async ({ tseActive = true } = {}) => {
   const item = await MenuItem.create({
     restaurantId: restaurant._id,
     title: "Pizza",
-    price: 10,
     priceCents: 1000,
     categoryId: category._id,
     inStock: true,

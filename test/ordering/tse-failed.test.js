@@ -91,7 +91,6 @@ const fixture = async ({ tableNumber = 7 } = {}) => {
   const pizza = await MenuItem.create({
     restaurantId: restaurant._id,
     title: "Pizza",
-    price: 12.5,
     priceCents: 1250,
     categoryId: food._id,
     inStock: true,
@@ -99,7 +98,6 @@ const fixture = async ({ tableNumber = 7 } = {}) => {
   const beer = await MenuItem.create({
     restaurantId: restaurant._id,
     title: "Beer",
-    price: 4.2,
     priceCents: 420,
     categoryId: drinks._id,
     inStock: true,

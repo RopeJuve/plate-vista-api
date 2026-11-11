@@ -1,4 +1,3 @@
-import currency from "currency.js";
 import Restaurant from "../modules/restaurants/restaurant.model.js";
 import Category, { CATEGORY_NAME_COLLATION } from "../modules/categories/category.model.js";
 import MenuItem from "../modules/menu/menuItem.model.js";
@@ -30,8 +29,7 @@ export const seedSampleMenu = async (slug) => {
       restaurantId,
       title: item.title,
       description: item.description ?? "",
-      price: currency(item.price).value,
-      priceCents: currency(item.price).intValue,
+      priceCents: item.priceCents,
       image: item.image,
       categoryId: categoryOf.get(key(item.category))._id,
       popular: Boolean(item.popular),

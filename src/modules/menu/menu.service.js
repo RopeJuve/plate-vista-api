@@ -1,11 +1,8 @@
-import currency from "currency.js";
 import MenuItem from "./menuItem.model.js";
 import Restaurant from "../restaurants/restaurant.model.js";
 import { AppError, isDuplicateKey } from "../../shared/errors.js";
 import { publish } from "../../realtime/events.js";
 import { categoriesById, findCategory } from "../categories/category.service.js";
-
-const toCents = (price) => currency(price).intValue;
 
 // Name, station, and VAT rate come from the item's category; the station is never the
 // item's own (docs/adr/0001-station-belongs-to-category.md).
@@ -37,7 +34,6 @@ const toPublicMenu = (item) => ({
   _id: String(item._id),
   title: item.title,
   description: item.description || "",
-  price: item.price,
   priceCents: item.priceCents,
   image: item.image || null,
   category: item.category,
@@ -47,14 +43,15 @@ const toPublicMenu = (item) => ({
 });
 
 const toDTO = (item, categories) => {
-  const source = item.toObject ? item.toObject() : item;
+  // An item saved before scripts/migrate-drop-menu-price.js ran still has the
+  // legacy float price; it is never sent.
+  const { price: _legacyPrice, ...source } = item.toObject ? item.toObject() : item;
   return {
     ...source,
     description: source.description || "",
     image: source.image || null,
     ...categoryFields(source, categories),
     priceCents: source.priceCents,
-    price: currency(source.priceCents ?? 0, { fromCents: true }).value,
   };
 };
 
@@ -116,8 +113,7 @@ export const createMenuItem = async (restaurantId, input) => {
       restaurantId,
       title: input.title,
       description: input.description ?? "",
-      price: currency(input.price).value,
-      priceCents: toCents(input.price),
+      priceCents: input.priceCents,
       image: input.image ?? null,
       categoryId: input.categoryId,
       popular: input.popular ?? false,
@@ -144,10 +140,6 @@ const publishMenu = (restaurantId, data) => {
 
 export const updateMenuItem = async (restaurantId, id, input) => {
   const patch = { ...input };
-  if (patch.price != null) {
-    patch.price = currency(input.price).value;
-    patch.priceCents = toCents(input.price);
-  }
   const keys = Object.keys(patch);
   if (keys.length === 0) return getMenuItem(restaurantId, id);
   if (patch.categoryId !== undefined) await assertOwnCategory(restaurantId, patch.categoryId);
