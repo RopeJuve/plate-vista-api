@@ -122,7 +122,7 @@ test("mass assignment: numSold cannot be set through the update body", async () 
     .send({
       title: "Test Pizza",
       description: "desc",
-      price: 10,
+      priceCents: 1000,
       image: "https://img.example/x.png",
       categoryId,
     });

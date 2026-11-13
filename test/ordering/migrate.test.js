@@ -110,7 +110,6 @@ test("tenant migration backfills restaurantId and can run twice", async () => {
     restaurantId: other._id,
     title: "Pizza",
     description: "desc",
-    price: 12,
     priceCents: 1200,
     image: "y.png",
     categoryId: new mongoose.Types.ObjectId(),
@@ -276,7 +275,6 @@ test("the sample menu fills a restaurant once and never touches its own items", 
   await MenuItem.create({
     restaurantId: place._id,
     title: "pizza margherita",
-    price: 7,
     priceCents: 700,
     categoryId: mine._id,
   });
@@ -297,4 +295,39 @@ test("the sample menu fills a restaurant once and never touches its own items", 
   assert.match(lager.image, /^https:\/\/images\.unsplash\.com\//);
 
   await assert.rejects(() => seedSampleMenu("no-such-place"), /No restaurant with slug/);
+});
+
+test("menu price migration turns the float price into cents, drops it, and can run twice", async () => {
+  const { migrateDropMenuPrice } = await import("../../src/db/migrateDropMenuPrice.js");
+  const items = mongoose.connection.db.collection("menuitems");
+  const restaurantId = new mongoose.Types.ObjectId();
+  await items.insertMany([
+    { restaurantId, title: `Legacy ${restaurantId}`, price: 9.99 },
+    { restaurantId, title: `Both ${restaurantId}`, price: 4.2, priceCents: 450 },
+    { restaurantId, title: `New ${restaurantId}`, priceCents: 300 },
+  ]);
+  const priceOf = async (title) => items.findOne({ restaurantId, title: `${title} ${restaurantId}` });
+
+  const dry = await migrateDropMenuPrice({ dryRun: true });
+  assert.equal(dry.dryRun, true);
+  assert.ok(dry.converted >= 1);
+  assert.ok(dry.unset >= 2);
+  assert.equal((await priceOf("Legacy")).price, 9.99);
+  assert.equal((await priceOf("Legacy")).priceCents, undefined);
+
+  const first = await migrateDropMenuPrice();
+  assert.ok(first.converted >= 1);
+  const legacy = await priceOf("Legacy");
+  assert.equal(legacy.priceCents, 999);
+  assert.equal("price" in legacy, false);
+  const both = await priceOf("Both");
+  assert.equal(both.priceCents, 450);
+  assert.equal("price" in both, false);
+  assert.equal((await priceOf("New")).priceCents, 300);
+  assert.equal(await items.countDocuments({ price: { $exists: true } }), 0);
+
+  const before = await items.find({}).sort({ _id: 1 }).toArray();
+  const second = await migrateDropMenuPrice();
+  assert.deepEqual(second, { dryRun: false, converted: 0, unset: 0 });
+  assert.deepEqual(await items.find({}).sort({ _id: 1 }).toArray(), before);
 });

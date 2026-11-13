@@ -140,7 +140,6 @@ const fixture = async () => {
     restaurantId: restaurant._id,
     title: "Pizza",
     description: "desc",
-    price: 10,
     priceCents: 1000,
     image: "x.png",
     categoryId: (await categoryIn(restaurant._id, "food", "kitchen"))._id,
@@ -299,7 +298,6 @@ test("creating an order with 10 items performs 1 menu query", async () => {
         restaurantId: place.restaurant._id,
         title: `Dish ${index}`,
         description: "desc",
-        price: 3,
         priceCents: 300,
         image: "x.png",
         categoryId: (await categoryIn(place.restaurant._id))._id,
@@ -332,7 +330,7 @@ test("menu price edits and deletes do not change an existing bill", async () => 
   });
   await MenuItem.updateOne(
     { _id: place.item._id, restaurantId: place.restaurant._id },
-    { price: 99, priceCents: 9900 }
+    { priceCents: 9900 }
   );
   const afterPrice = await getOrder(place.restaurant._id, created.order._id);
   assert.equal(afterPrice.items[0].unitPriceCents, 1000);
@@ -1190,7 +1188,6 @@ test("statistics report sales per day, dish, and category in the restaurant's ti
     restaurantId: place.restaurant._id,
     title: "Bier",
     description: "desc",
-    price: 4,
     priceCents: 400,
     image: "x.png",
     categoryId: (await categoryIn(place.restaurant._id, "drinks", "bar"))._id,
@@ -1415,7 +1412,6 @@ test("orders go to the station of the item's category; a change affects new orde
   const beer = await MenuItem.create({
     restaurantId: place.restaurant._id,
     title: "Pils",
-    price: 4,
     priceCents: 400,
     categoryId: beerCategory._id,
   });
@@ -1477,7 +1473,6 @@ test("order lines copy the category's VAT rate; a later change affects new order
   const beer = await MenuItem.create({
     restaurantId: place.restaurant._id,
     title: "Pils",
-    price: 4,
     priceCents: 400,
     categoryId: beerCategory._id,
   });
@@ -1531,7 +1526,6 @@ const withBeer = async () => {
   const beer = await MenuItem.create({
     restaurantId: place.restaurant._id,
     title: "Pils",
-    price: 4,
     priceCents: 400,
     categoryId: (await categoryIn(place.restaurant._id, "Beer", "bar"))._id,
   });
@@ -1694,7 +1688,7 @@ test("menu items need no image or description; links must be https and the categ
     request(app)
       .post("/api/v1/menu-items")
       .set("Authorization", `Bearer ${place.token}`)
-      .send({ price: 3, categoryId: String(drinks._id), ...body });
+      .send({ priceCents: 300, categoryId: String(drinks._id), ...body });
 
   const plain = await create({ title: "Cola 0.33" });
   assert.equal(plain.status, 201);
@@ -1725,6 +1719,61 @@ test("menu items need no image or description; links must be https and the categ
   assert.equal(missing.status, 400);
 });
 
+test("menu items take only an integer priceCents and never answer with a float price", async () => {
+  const place = await fixture();
+  const food = await categoryIn(place.restaurant._id);
+  const auth = (req) => req.set("Authorization", `Bearer ${place.token}`);
+  const create = (body) =>
+    auth(request(app).post("/api/v1/menu-items")).send({ categoryId: String(food._id), ...body });
+  const update = (body) => auth(request(app).put(`/api/v1/menu-items/${place.item._id}`)).send(body);
+
+  for (const body of [
+    { title: "Soup", priceCents: 12.5 },
+    { title: "Soup", price: 12.5 },
+    { title: "Soup", price: 12.5, priceCents: 1250 },
+    { title: "Soup", priceCents: 0 },
+    { title: "Soup", priceCents: "1250" },
+    { title: "Soup" },
+  ]) {
+    const rejected = await create(body);
+    assert.equal(rejected.status, 400, JSON.stringify(body));
+    assert.equal(rejected.body.code, "VALIDATION", JSON.stringify(body));
+  }
+  for (const body of [{ priceCents: 12.5 }, { price: 12.5 }, { priceCents: -100 }]) {
+    const rejected = await update(body);
+    assert.equal(rejected.status, 400, JSON.stringify(body));
+    assert.equal(rejected.body.code, "VALIDATION", JSON.stringify(body));
+  }
+
+  const created = await create({ title: "Soup", priceCents: 650 });
+  assert.equal(created.status, 201);
+  assert.equal(created.body.priceCents, 650);
+  assert.equal("price" in created.body, false);
+  const updated = await update({ priceCents: 1250 });
+  assert.equal(updated.status, 200);
+  assert.equal(updated.body.priceCents, 1250);
+  assert.equal("price" in updated.body, false);
+
+  const stored = await MenuItem.findOne({ _id: created.body._id, restaurantId: place.restaurant._id }).lean();
+  assert.equal("price" in stored, false);
+
+  // A row the migration has not reached yet keeps its float price in the database.
+  await MenuItem.collection.updateOne({ _id: place.item._id }, { $set: { price: 12.5 } });
+  const responses = [
+    await auth(request(app).get("/api/v1/menu-items")),
+    await auth(request(app).get(`/api/v1/menu-items/${place.item._id}`)),
+    await request(app).get(`/api/v1/r/${place.restaurant.slug}/menu-items`),
+    await request(app).get(`/api/v1/r/${place.restaurant.slug}/menu-items/${place.item._id}`),
+  ];
+  for (const response of responses) {
+    assert.equal(response.status, 200);
+    for (const item of [response.body].flat()) {
+      assert.equal("price" in item, false, `${response.req.path} answered with price`);
+      assert.equal(Number.isInteger(item.priceCents), true);
+    }
+  }
+});
+
 test("the guest menu follows category order, hides empty categories, and lists popular items first", async () => {
   const place = await fixture();
   const drinks = await categoryIn(place.restaurant._id, "Drinks", "bar");
@@ -1734,7 +1783,6 @@ test("the guest menu follows category order, hides empty categories, and lists p
     MenuItem.create({
       restaurantId: place.restaurant._id,
       title,
-      price: 5,
       priceCents: 500,
       categoryId,
       popular,
@@ -2044,7 +2092,7 @@ test("a menu price change reaches guest sockets as menu.updated", async () => {
   const updated = await request(app)
     .put(`/api/v1/menu-items/${place.item._id}`)
     .set("Authorization", `Bearer ${place.token}`)
-    .send({ price: 12.5 });
+    .send({ priceCents: 1250 });
   assert.equal(updated.status, 200);
   const event = await waitFor(guest.messages, (message) => message.event === "menu.updated");
   assert.equal(event.data._id, String(place.item._id));
@@ -2190,7 +2238,6 @@ const PUBLIC_MENU_KEYS = new Set([
   "_id",
   "title",
   "description",
-  "price",
   "priceCents",
   "image",
   "category",
@@ -2209,7 +2256,6 @@ test("cross-tenant lists, creates, stats, public menu, and sockets stay inside r
     restaurantId: a.restaurant._id,
     title: `Hidden ${tag}`,
     description: "archived",
-    price: 2,
     priceCents: 200,
     image: "h.png",
     categoryId: (await categoryIn(a.restaurant._id))._id,
@@ -2220,7 +2266,6 @@ test("cross-tenant lists, creates, stats, public menu, and sockets stay inside r
     restaurantId: b.restaurant._id,
     title: `Secret ${tag}`,
     description: "other restaurant",
-    price: 8,
     priceCents: 800,
     image: "s.png",
     categoryId: (await categoryIn(b.restaurant._id, `secret-${tag}`))._id,
@@ -2317,7 +2362,7 @@ test("cross-tenant lists, creates, stats, public menu, and sockets stay inside r
   const createdMenu = await asA("post", "/api/v1/menu-items").send({
     title: `Bisque ${tag}`,
     description: "soup",
-    price: 4,
+    priceCents: 400,
     image: "https://img.example/b.png",
     categoryId: String((await categoryIn(a.restaurant._id))._id),
     restaurantId: String(b.restaurant._id),
@@ -2406,7 +2451,7 @@ test("cross-tenant lists, creates, stats, public menu, and sockets stay inside r
   assert.equal(bCategoryNow.name, `B-only ${tag}`);
   const intoB = await asA("post", "/api/v1/menu-items").send({
     title: `Sneaky ${tag}`,
-    price: 4,
+    priceCents: 400,
     categoryId: String(bCategory._id),
   });
   assert.equal(intoB.status, 400);

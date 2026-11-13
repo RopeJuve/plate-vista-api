@@ -11,7 +11,6 @@ const menuItemSchema = new Schema(
     },
     title: { type: String, required: true },
     description: { type: String, default: "" },
-    price: { type: Number, required: true },
     priceCents: { type: Number, required: true },
     // No image means guests see the placeholder for the item's station.
     image: { type: String, default: null },
