@@ -10,6 +10,14 @@ Restaurant ordering: guests order from their table by QR code, staff work the or
 One business using Plate Vista, identified to guests and staff by its slug. Everything else belongs to exactly one restaurant.
 _Avoid_: Tenant (in product language), shop, venue
 
+**Restaurant Profile**:
+What guests see about a restaurant: its logo, its address, and its weekly opening hours. Separate from the legal details a receipt needs; a profile without an address of its own shows the legal address. Opening hours are shown to guests only and never stop them ordering.
+_Avoid_: About page, branding, public details
+
+**Opening Hours**:
+The times in a restaurant's own timezone, per weekday, when it is open; a day has up to three ranges, and a range that closes before it opens runs past midnight.
+_Avoid_: Business hours, service times
+
 **Owner**:
 The person who registered the restaurant and manages it from the dashboard; signs in with their email.
 _Avoid_: Admin (an admin is a staff role below the owner)

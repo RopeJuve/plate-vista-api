@@ -1,4 +1,5 @@
 import { Schema, model } from "mongoose";
+import { WEEKDAYS } from "./profile.schemas.js";
 
 const restaurantSchema = new Schema(
   {
@@ -21,6 +22,34 @@ const restaurantSchema = new Schema(
       },
       taxNumber: { type: String, trim: true },
       vatId: { type: String, trim: true },
+    },
+    // The Restaurant Profile guests see; profile.js validates and reads it.
+    // No address of its own means guests see the legal address.
+    profile: {
+      logoUrl: { type: String, trim: true },
+      address: {
+        type: new Schema(
+          {
+            street: { type: String, trim: true },
+            zip: { type: String, trim: true },
+            city: { type: String, trim: true },
+          },
+          { _id: false }
+        ),
+        default: null,
+      },
+      openingHours: {
+        type: new Schema(
+          Object.fromEntries(
+            WEEKDAYS.map((day) => [
+              day,
+              [new Schema({ open: String, close: String }, { _id: false })],
+            ])
+          ),
+          { _id: false }
+        ),
+        default: undefined,
+      },
     },
     // The restaurant's TSE at fiskaly. tse.service.js fills it in step by step
     // (setupStep is the last step that finished) so a failed setup resumes.

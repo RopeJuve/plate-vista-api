@@ -2192,6 +2192,9 @@ const AUTHENTICATED_ROUTES = [
   "GET /api/v1/staff/board",
   "GET /api/v1/restaurant/legal",
   "PUT /api/v1/restaurant/legal",
+  "GET /api/v1/restaurant/profile",
+  "PUT /api/v1/restaurant/profile",
+  "POST /api/v1/restaurant/profile/logo-upload-signature",
   "GET /api/v1/tse",
   "POST /api/v1/tse/setup",
   "GET /api/v1/tse/failed",
@@ -2416,6 +2419,32 @@ test("cross-tenant lists, creates, stats, public menu, and sockets stay inside r
   const bLegalNow = await Restaurant.findById(b.restaurant._id).lean();
   assert.equal(bLegalNow.legal.legalName, `B Legal ${tag}`);
   assert.equal(bLegalNow.legal.vatId ?? null, null);
+  // Restaurant Profile: A only ever reads and writes its own, and cannot use B's logo.
+  const bHours = { mon: [{ open: "08:00", close: "09:00" }] };
+  await Restaurant.updateOne({ _id: b.restaurant._id }, { $set: { "profile.openingHours": bHours } });
+  const aProfile = await asA("get", "/api/v1/restaurant/profile");
+  cover("GET", "/api/v1/restaurant/profile");
+  assert.equal(aProfile.status, 200);
+  assert.deepEqual(aProfile.body.openingHours.mon, []);
+  const bLogo = `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME || "demo"}/image/upload/v1/plate-vista/${b.restaurant._id}/logo/b.png`;
+  const aProfileWithBLogo = await asA("put", "/api/v1/restaurant/profile").send({ logoUrl: bLogo });
+  cover("PUT", "/api/v1/restaurant/profile");
+  assert.equal(aProfileWithBLogo.status, 400);
+  const aProfileSaved = await asA("put", "/api/v1/restaurant/profile").send({
+    restaurantId: String(b.restaurant._id),
+    openingHours: { tue: [{ open: "10:00", close: "11:00" }] },
+  });
+  assert.equal(aProfileSaved.status, 200);
+  const bProfileNow = await Restaurant.findById(b.restaurant._id).lean();
+  assert.deepEqual(bProfileNow.profile.openingHours.mon, bHours.mon);
+  assert.deepEqual(bProfileNow.profile.openingHours.tue, []);
+  const logoSignature = await asA("post", "/api/v1/restaurant/profile/logo-upload-signature");
+  cover("POST", "/api/v1/restaurant/profile/logo-upload-signature");
+  if (logoSignature.status === 200) {
+    assert.equal(logoSignature.body.folder, `plate-vista/${a.restaurant._id}/logo`);
+  } else {
+    assert.equal(logoSignature.status, 503);
+  }
   // TSE: A sees only its own (inactive) TSE and cannot set up B's.
   await Restaurant.updateOne(
     { _id: b.restaurant._id },

@@ -22,7 +22,7 @@ import sessionRouter from "./modules/ordering/session.routes.js";
 import tableRouter from "./modules/tables/table.routes.js";
 import statisticsRouter from "./modules/stats/stats.routes.js";
 import internalRouter from "./modules/internal/internal.routes.js";
-import restaurantRouter from "./modules/restaurants/restaurant.routes.js";
+import restaurantRouter, { publicRestaurantRouter } from "./modules/restaurants/restaurant.routes.js";
 import tseRouter from "./modules/tse/tse.routes.js";
 import receiptRouter from "./modules/payments/receipt.routes.js";
 
@@ -111,6 +111,7 @@ app.use("/api/v1/auth", authRouter);
 app.use("/api/v1/menu-items", menuRouter);
 app.use("/api/v1/categories", categoryRouter);
 app.use("/api/v1/r", publicMenuRouter);
+app.use("/api/v1/r", publicRestaurantRouter);
 app.use("/api/v1/orders", orderRouter);
 app.use("/api/v1/sessions", sessionRouter);
 app.use("/api/v1/table", tableRouter);
