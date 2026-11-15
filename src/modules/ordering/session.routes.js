@@ -5,6 +5,8 @@ import { checkId, requireAuth, requireRole, requireTenant } from "../staff/auth.
 import { closeSession } from "./session.service.js";
 import { getSessionBill } from "./order.service.js";
 import { recordPayment } from "../payments/payment.service.js";
+import { getReceiptTokenForSession } from "../payments/receipt.service.js";
+import { receiptTokenLimiter } from "../../shared/rateLimiters.js";
 import { closeSessionSchema } from "../payments/payment.schemas.js";
 import { parseOrThrow } from "../../shared/validate.js";
 
@@ -23,6 +25,24 @@ sessionRouter.get(
       throw new AppError("NOT_FOUND", "Not found", 404);
     }
     res.status(200).json(await getSessionBill(req.tenant, req.params.id));
+  })
+);
+
+// Polled by the guest's app after paying, until the payment exists. Same
+// access as the bill: a guest reaches only their own session, even closed.
+sessionRouter.get(
+  "/:id/receipt-token",
+  receiptTokenLimiter,
+  requireAuth,
+  requireRole("employee", "guest"),
+  requireTenant,
+  checkId,
+  asyncRoute(async (req, res) => {
+    if (req.user.role === "guest" && req.user.sessionId !== req.params.id) {
+      throw new AppError("NOT_FOUND", "Not found", 404);
+    }
+    const result = await getReceiptTokenForSession(req.tenant.restaurantId, req.params.id);
+    res.status(result.status === "PAYING" ? 202 : 200).json(result);
   })
 );
 

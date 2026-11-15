@@ -86,6 +86,10 @@ POST /sessions/:id/payments
   -> 404
 
 GET /sessions/:id/bill (existing)  + payment: Payment | null
+GET /sessions/:id/receipt-token    guest of this session (also closed) or staff; 60/min per IP
+  -> 200 { receiptToken }            the bill has a Payment (any method)
+  -> 202 { status: 'PAYING' }        session is paying: online payment in progress
+  -> 404                             no payment and not paying
 GET /staff/board (existing)        sessions[] + payment: Payment | null   (PROTOCOL 2.4)
 ```
 

@@ -35,3 +35,14 @@ export const receiptLimiter = rateLimit({
   legacyHeaders: false,
   message: { code: "RATE_LIMITED", message: "Too many requests, please try again later" },
 });
+
+// Guards GET /sessions/:id/receipt-token, which the guest's app polls after
+// paying until the payment lands. Its own budget, so polling never eats into
+// the allowance for opening the receipt itself.
+export const receiptTokenLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { code: "RATE_LIMITED", message: "Too many requests, please try again later" },
+});
