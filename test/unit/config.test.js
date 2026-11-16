@@ -88,3 +88,30 @@ test("an ENCRYPTION_KEY that is not 32 bytes of base64 is rejected", () => {
     assert.throws(() => loadEnv({ ...production, ENCRYPTION_KEY: bad }), /ENCRYPTION_KEY/);
   }
 });
+
+test("Stripe settings are optional and the platform fee defaults to 0 basis points", () => {
+  const env = loadEnv(base);
+  assert.equal(env.STRIPE_SECRET_KEY, undefined);
+  assert.equal(env.STRIPE_WEBHOOK_SECRET, undefined);
+  assert.equal(env.STRIPE_APPLICATION_FEE_BPS, 0);
+
+  const configured = loadEnv({
+    ...base,
+    STRIPE_SECRET_KEY: "sk_test_123",
+    STRIPE_WEBHOOK_SECRET: "whsec_123",
+    STRIPE_APPLICATION_FEE_BPS: "150",
+    GUEST_APP_URL: "https://guest.example.com",
+    DASHBOARD_URL: "https://dashboard.example.com",
+  });
+  assert.equal(configured.STRIPE_SECRET_KEY, "sk_test_123");
+  assert.equal(configured.STRIPE_WEBHOOK_SECRET, "whsec_123");
+  assert.equal(configured.STRIPE_APPLICATION_FEE_BPS, 150);
+  assert.equal(configured.GUEST_APP_URL, "https://guest.example.com");
+  assert.equal(configured.DASHBOARD_URL, "https://dashboard.example.com");
+});
+
+test("the platform fee must be a whole number of basis points", () => {
+  for (const STRIPE_APPLICATION_FEE_BPS of ["1.5", "-1", "abc", "10001"]) {
+    assert.throws(() => loadEnv({ ...base, STRIPE_APPLICATION_FEE_BPS }), /STRIPE_APPLICATION_FEE_BPS/);
+  }
+});
