@@ -25,6 +25,7 @@ import internalRouter from "./modules/internal/internal.routes.js";
 import restaurantRouter, { publicRestaurantRouter } from "./modules/restaurants/restaurant.routes.js";
 import tseRouter from "./modules/tse/tse.routes.js";
 import receiptRouter from "./modules/payments/receipt.routes.js";
+import { payoutAccountRouter, stripeWebhookRouter } from "./modules/payouts/payout.routes.js";
 
 void initSentry();
 
@@ -61,6 +62,22 @@ app.use(
     exposedHeaders: ["authorization"],
   })
 );
+// Vercel imports this file without running server.js, so nothing has opened
+// the connection on a cold instance. Without this, queries sit in Mongoose's
+// buffer until the function times out.
+const ensureDatabase = async (_req, _res, next) => {
+  try {
+    await connectToDatabase();
+    next();
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Before express.json(): Stripe signs the raw body, so the webhook parses its
+// own (express.raw) and nothing else may consume it first.
+app.use("/api/v1/webhooks", ensureDatabase, stripeWebhookRouter);
+
 app.use(express.json({ limit: "100kb" }));
 app.use(express.urlencoded({ extended: true, limit: "100kb" }));
 app.use((req, res, next) => {
@@ -89,17 +106,7 @@ app.get("/health", async (_req, res) => {
   }
 });
 
-// Vercel imports this file without running server.js, so nothing has opened
-// the connection on a cold instance. Without this, queries sit in Mongoose's
-// buffer until the function times out.
-app.use("/api", async (_req, _res, next) => {
-  try {
-    await connectToDatabase();
-    next();
-  } catch (error) {
-    next(error);
-  }
-});
+app.use("/api", ensureDatabase);
 
 app.post("/api/v1/ws-ticket", requireAuth, (req, res) => {
   res.status(200).json({ ticket: generateWsTicket(req.user), expiresIn: 60 });
@@ -118,6 +125,7 @@ app.use("/api/v1/table", tableRouter);
 app.use("/api/v1/statistics", statisticsRouter);
 app.use("/api/v1/staff", staffRouter);
 app.use("/api/v1/restaurant", restaurantRouter);
+app.use("/api/v1/restaurant", payoutAccountRouter);
 app.use("/api/v1/tse", tseRouter);
 app.use("/api/v1/receipts", receiptRouter);
 app.use("/internal", internalRouter);

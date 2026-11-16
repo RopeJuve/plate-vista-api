@@ -28,6 +28,12 @@ const schema = z
       .refine(isValidKey, "ENCRYPTION_KEY must be base64 that decodes to 32 bytes")
       .optional(),
     ENABLE_JOBS: z.enum(["true", "false"]).default("false"),
+    STRIPE_SECRET_KEY: z.string().optional(),
+    STRIPE_WEBHOOK_SECRET: z.string().optional(),
+    // The platform fee in basis points; 0 sends no application fee.
+    STRIPE_APPLICATION_FEE_BPS: z.coerce.number().int().min(0).max(10000).default(0),
+    GUEST_APP_URL: z.string().url().optional(),
+    DASHBOARD_URL: z.string().url().optional(),
   })
   .superRefine((value, ctx) => {
     if (value.NODE_ENV === "production") {
@@ -92,6 +98,11 @@ export const loadEnv = (source = process.env) => {
     FISKALY_BASE_URL: emptyToUndefined(source.FISKALY_BASE_URL),
     ENCRYPTION_KEY: emptyToUndefined(source.ENCRYPTION_KEY),
     ENABLE_JOBS: emptyToUndefined(source.ENABLE_JOBS),
+    STRIPE_SECRET_KEY: emptyToUndefined(source.STRIPE_SECRET_KEY),
+    STRIPE_WEBHOOK_SECRET: emptyToUndefined(source.STRIPE_WEBHOOK_SECRET),
+    STRIPE_APPLICATION_FEE_BPS: emptyToUndefined(source.STRIPE_APPLICATION_FEE_BPS),
+    GUEST_APP_URL: emptyToUndefined(source.GUEST_APP_URL),
+    DASHBOARD_URL: emptyToUndefined(source.DASHBOARD_URL),
   };
   const parsed = schema.safeParse(normalized);
   if (!parsed.success) {

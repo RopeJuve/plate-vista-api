@@ -36,6 +36,8 @@ import Restaurant from "../../src/modules/restaurants/restaurant.model.js";
 import Category from "../../src/modules/categories/category.model.js";
 import { registerRestaurant } from "../../src/modules/staff/staff.service.js";
 import { hasCompleteLegalDetails } from "../../src/modules/restaurants/legal.js";
+import { setStripeClient } from "../../src/modules/payouts/stripe.js";
+import { createFakeStripe } from "../support/fakeStripe.js";
 
 let replset;
 let app;
@@ -2196,6 +2198,8 @@ const AUTHENTICATED_ROUTES = [
   "GET /api/v1/restaurant/profile",
   "PUT /api/v1/restaurant/profile",
   "POST /api/v1/restaurant/profile/logo-upload-signature",
+  "GET /api/v1/restaurant/payout-account",
+  "POST /api/v1/restaurant/payout-account",
   "GET /api/v1/tse",
   "POST /api/v1/tse/setup",
   "GET /api/v1/tse/failed",
@@ -2477,6 +2481,43 @@ test("cross-tenant lists, creates, stats, public menu, and sockets stay inside r
   assert.equal(aRetry.status, 404);
   const bFailedNow = await Order.findOne({ _id: orderB.order._id, restaurantId: b.restaurant._id }).lean();
   assert.equal(bFailedNow.tse.retryCount, 20);
+  // Payout Account: A's owner reads and sets up only A's, never B's.
+  const bStripeAccountId = `acct_b_${tag}`;
+  await Restaurant.updateOne(
+    { _id: b.restaurant._id },
+    { $set: { payoutAccount: { stripeAccountId: bStripeAccountId, chargesEnabled: true, detailsSubmitted: true } } }
+  );
+  const ownerA = await Employee.create({
+    restaurantId: a.restaurant._id,
+    employee: `owner-${tag}`,
+    email: `owner-${tag}@example.com`,
+    password: passwordHash,
+    position: "owner",
+    role: "owner",
+  });
+  const asOwnerA = (method, url) =>
+    request(app)[method](url).set("Authorization", `Bearer ${generateToken(ownerA)}`);
+  const stripe = createFakeStripe();
+  setStripeClient(stripe);
+  process.env.DASHBOARD_URL = "https://dashboard.example.com";
+  try {
+    const aPayout = await asOwnerA("get", "/api/v1/restaurant/payout-account");
+    cover("GET", "/api/v1/restaurant/payout-account");
+    assert.deepEqual(aPayout.body, { connected: false, chargesEnabled: false, detailsSubmitted: false });
+    const aOnboarding = await asOwnerA("post", "/api/v1/restaurant/payout-account").send({ restaurantId: String(b.restaurant._id) });
+    cover("POST", "/api/v1/restaurant/payout-account");
+    assert.equal(aOnboarding.status, 200);
+    assert.equal(JSON.stringify(aOnboarding.body).includes(bStripeAccountId), false);
+    assert.equal(stripe.accountsCreated(), 1);
+    assert.equal(
+      stripe.calls.some(([op, params]) => op === "accountLinks.create" && params.account === bStripeAccountId),
+      false
+    );
+    assert.equal((await Restaurant.findById(b.restaurant._id).lean()).payoutAccount.stripeAccountId, bStripeAccountId);
+  } finally {
+    setStripeClient(null);
+    delete process.env.DASHBOARD_URL;
+  }
   const bCategoryNow = await Category.findOne({ _id: bCategory._id, restaurantId: b.restaurant._id });
   assert.equal(bCategoryNow.name, `B-only ${tag}`);
   const intoB = await asA("post", "/api/v1/menu-items").send({
