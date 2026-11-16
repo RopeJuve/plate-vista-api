@@ -66,6 +66,10 @@ _Avoid_: Check, tab, order (an order is one round on the bill)
 Settling a bill, in cash, by card at the restaurant's terminal, or online; recorded by staff, or by the payment provider for online payments, never by the guest's device.
 _Avoid_: Checkout (in product language), transaction (a transaction is the till's record)
 
+**Late Payment**:
+An online payment that completes after its bill was already paid, was no longer frozen, or its table was closed; it is refunded in full automatically and is never a Payment.
+_Avoid_: Double payment, overpayment
+
 **Payout Account**:
 The restaurant's own account at Stripe, which guests' online payments are paid into. The owner sets it up from the dashboard on a Stripe-hosted page, and only the owner may manage it.
 _Avoid_: Connect account, Stripe account (in product language)

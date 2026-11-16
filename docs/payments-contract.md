@@ -9,7 +9,7 @@ Background:
 - [ADR-0005: TSE signing runs on the Render server](adr/0005-tse-signing-runs-on-render.md)
 - [`GLOSSARY.md` → Paying](../GLOSSARY.md#paying): Bill, Payment, Receipt, TSE, VAT Rate
 
-The realtime part is in [`src/realtime/PROTOCOL.md`](../src/realtime/PROTOCOL.md) as v2.3.
+The realtime part is in [`src/realtime/PROTOCOL.md`](../src/realtime/PROTOCOL.md) as v2.3, and v2.5 for online payments.
 
 ## Conventions
 
@@ -19,7 +19,7 @@ All paths are under `/api/v1`. The tenant comes from the auth token, like existi
 
 ```ts
 VatRate         = 'NORMAL' | 'REDUCED_1'                   // 19 % | 7 %
-PaymentMethod   = 'CASH' | 'CARD_TERMINAL' | 'ONLINE'      // ONLINE reserved for Stripe, later
+PaymentMethod   = 'CASH' | 'CARD_TERMINAL' | 'ONLINE'      // ONLINE only through the Stripe webhook
 SignatureStatus = 'PENDING' | 'SIGNED' | 'FAILED'
 ```
 
@@ -144,4 +144,103 @@ Sent to the staff room and the session's room unless noted.
 bill.paid          { sessionId, paymentId, receiptToken, method, totalCents }
 payment.signed     { paymentId, receiptToken }
 payment.signFailed { paymentId }          // staff room only
+```
+
+## Online payments (Stripe)
+
+The guest pays the whole **Bill** online through Stripe; the money goes to the restaurant's **Payout Account** ([ADR-0006](adr/0006-online-payments-go-to-the-restaurants-own-stripe-connect-account.md)). Only the Stripe webhook records an online Payment; neither the guest's device nor the frontend ever does. API tickets: #61 (Payout Account), #62 (switch, `canPayOnline`), #63 (start, freeze), #64 (webhook), #65 (Late Payment refund), #66 (unfreeze).
+
+Every route here answers 503 `STRIPE_NOT_CONFIGURED` when the server has no Stripe keys.
+
+### Payout Account (owner only; admin, bar, kitchen, guest → 403)
+
+```
+POST  /restaurant/payout-account  -> 200 { url }          // Stripe-hosted onboarding; send the browser there
+GET   /restaurant/payout-account  -> 200 PayoutAccount
+PATCH /restaurant/payout-account  { onlinePaymentsEnabled: bool } -> 200 PayoutAccount | 400 VALIDATION
+```
+
+```ts
+PayoutAccount = { connected: bool, chargesEnabled: bool, detailsSubmitted: bool, onlinePaymentsEnabled: bool }
+// connected:        a Payout Account was created (onboarding started)
+// detailsSubmitted: the owner finished Stripe's form
+// chargesEnabled:   Stripe allows charges; online payments can run
+// onlinePaymentsEnabled: the owner's switch, default true
+```
+
+Stripe sends the owner back to the dashboard:
+
+- `return_url` = `${DASHBOARD_URL}/admin/kasse?payout=return`: the owner left or finished the form. Read `GET` again; Stripe may still be reviewing.
+- `refresh_url` = `${DASHBOARD_URL}/admin/kasse?payout=refresh`: the link expired. `POST` again for a fresh link and redirect; the same account is reused.
+
+### The bill
+
+```
+GET /sessions/:id/bill (existing)  + canPayOnline: bool
+```
+
+`canPayOnline` is true only when the Payout Account has `chargesEnabled`, `onlinePaymentsEnabled` is on, the TSE is active, the session is `open`, the bill is unpaid with `totalCents > 0`, and Stripe is configured. Guests see nothing else about the Payout Account.
+
+**Frozen bill:** while a guest is paying online the session's `status` is `paying` (see **Bill** in `GLOSSARY.md`). New orders and ticket cancels fail with 409 `BILL_FROZEN`; staff can still move tickets forward.
+
+### Paying online (the session's guest, or staff)
+
+```
+POST /sessions/:id/online-payment
+  -> 200 { url, expiresAt }                 send the browser to url (Stripe); expiresAt is at most 30 min away
+                                             frozen already: the same url again, for anyone at the table
+  -> 409 ONLINE_PAYMENT_UNAVAILABLE         canPayOnline is false
+  -> 502 PAYMENT_PROVIDER_ERROR             Stripe failed; the bill stays open
+  -> 404                                     a guest token for another session
+
+POST /sessions/:id/online-payment/cancel    guest of this session, owner, admin (bar/kitchen → 403)
+  -> 200                                     unfrozen, or was not frozen
+  -> 409 BILL_PAYING_ONLINE                  the guest has just paid; wait for bill.paid
+```
+
+Stripe sends the guest back to their own table page, so the app finds the guest token there:
+
+- `success_url` = `${GUEST_APP_URL}/r/:slug/t/:qrCode?payment=return`: wait for `bill.paid`, polling `GET /sessions/:id/receipt-token` as a backup (202 `PAYING` = not confirmed yet, 404 = not paid and no longer frozen).
+- `cancel_url` = `${GUEST_APP_URL}/r/:slug/t/:qrCode?payment=cancelled`: call `POST /sessions/:id/online-payment/cancel`.
+
+**Staff win:** recording cash or card (`POST /sessions/:id/payments`) or closing the table on a frozen bill unfreezes it first. Both can answer 409 `BILL_PAYING_ONLINE` when the guest has just paid online.
+
+When the webhook records the online Payment, `bill.paid` arrives with `method: 'ONLINE'`, and the Payment, receipt and TSE signing are the same as for cash.
+
+### Late Payments (owner, admin)
+
+A **Late Payment** (see `GLOSSARY.md`) is refunded in full automatically and never becomes a Payment.
+
+```
+GET /restaurant/online-payment-refunds?limit=50&before=<refundedAt>
+  -> 200 { items: OnlinePaymentRefund[], nextBefore: string | null }   // newest first; limit 1–100, default 50
+```
+
+```ts
+OnlinePaymentRefund = {
+  id,
+  sessionId,
+  tableNumber,
+  amountCents,
+  reason: 'BILL_ALREADY_PAID' | 'BILL_NOT_FROZEN' | 'SESSION_CLOSED',
+  refundedAt,
+}
+```
+
+### Errors
+
+| Code | Status | When |
+|---|---|---|
+| `STRIPE_NOT_CONFIGURED` | 503 | the server has no Stripe keys |
+| `ONLINE_PAYMENT_UNAVAILABLE` | 409 | start while `canPayOnline` is false |
+| `PAYMENT_PROVIDER_ERROR` | 502 | Stripe failed when starting |
+| `BILL_FROZEN` | 409 | order or ticket cancel while the bill is frozen |
+| `BILL_PAYING_ONLINE` | 409 | unfreeze, staff payment or close when the guest has just paid online |
+
+### Realtime (PROTOCOL v2.5)
+
+```ts
+bill.frozen             { sessionId, expiresAt }                        // staff room + session room
+bill.unfrozen           { sessionId }                                   // staff room + session room
+online_payment.refunded { refund: OnlinePaymentRefund }                 // staff room only
 ```

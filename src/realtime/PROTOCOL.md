@@ -1,10 +1,14 @@
-# WebSocket protocol v2.4
+# WebSocket protocol v2.5
 
 Orders change only through this socket. REST reads the current board; it does not create or edit orders.
 
-This release is **2.4**. Clients connect with `/ws?v=2`. A missing `v` defaults to `2`. An unknown version is closed with code `4000` and reason `unsupported protocol version`.
+This release is **2.5**. Clients connect with `/ws?v=2`. A missing `v` defaults to `2`. An unknown version is closed with code `4000` and reason `unsupported protocol version`.
 
 ## Changelog
+
+### 2.5
+
+- Online payments (see [`docs/payments-contract.md`](../../docs/payments-contract.md) → Online payments). New events to the staff room and the session's room: `bill.frozen` and `bill.unfrozen`. New event to the staff room only: `online_payment.refunded`. A session is `paying` while its bill is frozen. `GET /sessions/:id/bill` has `canPayOnline`.
 
 ### 2.4
 
@@ -153,10 +157,10 @@ Staff snapshot of open sessions and their non-cancelled orders. Order objects ar
 Staff can read any session of their restaurant. A guest can read only the session in their table token. Works for open and closed sessions. Cancelled orders are excluded.
 
 ```jsonc
-{ "sessionId": "string", "session": {/* Session */}, "orders": [/* Order */], "totalCents": 1800, "payment": {/* Payment */} }
+{ "sessionId": "string", "session": {/* Session */}, "orders": [/* Order */], "totalCents": 1800, "payment": {/* Payment */}, "canPayOnline": false }
 ```
 
-`payment` (2.3) is `null` until the bill is paid. The `Payment` shape is in [`docs/payments-contract.md`](../../docs/payments-contract.md).
+`payment` (2.3) is `null` until the bill is paid. `canPayOnline` (2.5) says whether the guest may pay online now. The `Payment` shape is in [`docs/payments-contract.md`](../../docs/payments-contract.md).
 
 An order that races a session close is rejected with `SESSION_CLOSED`; it never lands in a closed session.
 
@@ -238,11 +242,14 @@ An unknown `type` is `VALIDATION`. The 11th message within 10 seconds is `RATE_L
 { "type": "event", "event": "bill.paid", "data": { "sessionId": "...", "paymentId": "...", "receiptToken": "...", "method": "CASH|CARD_TERMINAL|ONLINE", "totalCents": 1800 } }
 { "type": "event", "event": "payment.signed", "data": { "paymentId": "...", "receiptToken": "..." } }
 { "type": "event", "event": "payment.signFailed", "data": { "paymentId": "..." } }
+{ "type": "event", "event": "bill.frozen", "data": { "sessionId": "...", "expiresAt": "ISO-8601" } }
+{ "type": "event", "event": "bill.unfrozen", "data": { "sessionId": "..." } }
+{ "type": "event", "event": "online_payment.refunded", "data": { "refund": { "id": "...", "sessionId": "...", "tableNumber": 1, "amountCents": 1800, "reason": "BILL_ALREADY_PAID|BILL_NOT_FROZEN|SESSION_CLOSED", "refundedAt": "ISO-8601" } } }
 ```
 
-`bill.paid` (2.3) is sent when staff record a payment; the bill takes no more orders or cancellations after it. `payment.signed` (2.3) is sent when the TSE has signed that payment, so the receipt at `GET /api/v1/receipts/:receiptToken` now shows the signature. Both go to the staff room and the session's room. `payment.signFailed` (2.3) goes to the staff room only, when signing the payment failed; owners and admins can retry it through `/api/v1/tse/failed`. Payloads and the REST side are in [`docs/payments-contract.md`](../../docs/payments-contract.md).
+`bill.frozen` (2.5) is sent when a guest starts paying online: the session is `paying`, and orders and cancels fail with `BILL_FROZEN` until `bill.unfrozen` (2.5: the guest went back, the payment expired, or staff unfroze it) or `bill.paid` with `method: "ONLINE"`. After `bill.paid` the session is `open` again and the bill is paid. Both go to the staff room and the session's room. `online_payment.refunded` (2.5) goes to the staff room only, when a Late Payment was refunded.
 
-`session.paid` is reserved for a later Stripe flow and is not emitted yet.
+`bill.paid` (2.3) is sent when staff record a payment; the bill takes no more orders or cancellations after it. `payment.signed` (2.3) is sent when the TSE has signed that payment, so the receipt at `GET /api/v1/receipts/:receiptToken` now shows the signature. Both go to the staff room and the session's room. `payment.signFailed` (2.3) goes to the staff room only, when signing the payment failed; owners and admins can retry it through `/api/v1/tse/failed`. Payloads and the REST side are in [`docs/payments-contract.md`](../../docs/payments-contract.md).
 
 `order.statusChanged` carries the order's `status`, all its `tickets`, and its `totalCents` after the change; `station` is present when the message named one. Cancel emits it too, with `reason`; `status` is `"cancelled"` only when that was the order's last ticket. `session.opened` goes to the staff room only, and only when that order opened the session. Other order events go to that session's room and the staff room.
 
