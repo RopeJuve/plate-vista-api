@@ -160,6 +160,16 @@ Staff can read any session of their restaurant. A guest can read only the sessio
 
 An order that races a session close is rejected with `SESSION_CLOSED`; it never lands in a closed session.
 
+### GET /api/v1/sessions/:id/receipt-token
+
+Polled by the guest's app after paying, until the payment exists; then open the receipt with `GET /api/v1/receipts/:receiptToken`. Same access as the bill (a guest only their own session, also after it is closed). Rate limited to 60 requests a minute per IP.
+
+```jsonc
+200 { "receiptToken": "string" }   // the bill has a Payment (any method)
+202 { "status": "PAYING" }         // the session is paying: online payment in progress
+404                                // no payment and not paying
+```
+
 ## Client → server
 
 ```json

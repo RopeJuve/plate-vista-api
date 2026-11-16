@@ -2174,6 +2174,7 @@ const AUTHENTICATED_ROUTES = [
   "PUT /api/v1/orders/:id/status",
   "DELETE /api/v1/orders/:id",
   "GET /api/v1/sessions/:id/bill",
+  "GET /api/v1/sessions/:id/receipt-token",
   "POST /api/v1/sessions/:id/close",
   "POST /api/v1/sessions/:id/payments",
   "GET /api/v1/table",
@@ -2592,6 +2593,7 @@ test("cross-tenant lists, creates, stats, public menu, and sockets stay inside r
     ["delete", `/api/v1/employee/${b.employee._id}`, "DELETE /api/v1/employee/:id"],
     ["get", `/api/v1/orders/${orderB.order._id}`, "GET /api/v1/orders/:id"],
     ["get", `/api/v1/sessions/${orderB.order.sessionId}/bill`, "GET /api/v1/sessions/:id/bill"],
+    ["get", `/api/v1/sessions/${orderB.order.sessionId}/receipt-token`, "GET /api/v1/sessions/:id/receipt-token"],
     ["post", `/api/v1/sessions/${orderB.order.sessionId}/close`, "POST /api/v1/sessions/:id/close"],
     ["post", `/api/v1/sessions/${orderB.order.sessionId}/payments`, "POST /api/v1/sessions/:id/payments"],
   ];

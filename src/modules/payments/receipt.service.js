@@ -1,5 +1,6 @@
 import Payment from "./payment.model.js";
 import Restaurant from "../restaurants/restaurant.model.js";
+import TableSession from "../ordering/session.model.js";
 import { serializeLegalDetails } from "../restaurants/legal.js";
 import { getBillLines } from "../ordering/order.service.js";
 import { mergeReceiptLines, totalsByVat } from "./money.js";
@@ -81,4 +82,15 @@ export const getReceipt = async (receiptToken) => {
     paidAt: iso(payment.paidAt),
     signature: serializeSignature(payment.tse),
   };
+};
+
+// What the guest's app polls after paying: the receipt token once the bill
+// has a payment, or PAYING while an online payment is still in progress.
+// Works after the session is closed, so a guest can still find their receipt.
+export const getReceiptTokenForSession = async (restaurantId, sessionId) => {
+  const payment = await Payment.findOne({ restaurantId, sessionId }).select("receiptToken").lean();
+  if (payment) return { receiptToken: payment.receiptToken };
+  const session = await TableSession.findOne({ _id: sessionId, restaurantId }).select("status").lean();
+  if (session?.status === "paying") return { status: "PAYING" };
+  throw notFound();
 };
