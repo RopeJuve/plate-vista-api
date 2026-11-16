@@ -59,7 +59,7 @@ _Avoid_: Order, sub-order
 ### Paying
 
 **Bill**:
-Everything a table orders during one visit, from its first order until staff close the table; its total leaves out cancelled tickets. Guests pay for the bill, not for each order, and once paid it takes no more orders or cancellations.
+Everything a table orders during one visit, from its first order until staff close the table; its total leaves out cancelled tickets. Guests pay for the whole bill, not for each order, and once paid it takes no more orders or cancellations. While a guest is paying online the bill is frozen: it takes no orders or cancellations until the payment completes or is abandoned.
 _Avoid_: Check, tab, order (an order is one round on the bill)
 
 **Payment**:
