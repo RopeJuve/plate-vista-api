@@ -77,8 +77,27 @@ const restaurantSchema = new Schema(
       },
       setupAt: { type: Date },
     },
+    // The restaurant's Payout Account at Stripe (ADR-0006), created by
+    // payouts/payout.service.js; the webhook keeps the flags in step. The id
+    // is for us only and never goes to guests.
+    payoutAccount: {
+      type: new Schema(
+        {
+          stripeAccountId: { type: String, required: true },
+          chargesEnabled: { type: Boolean, default: false },
+          detailsSubmitted: { type: Boolean, default: false },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
   },
   { timestamps: true }
+);
+
+restaurantSchema.index(
+  { "payoutAccount.stripeAccountId": 1 },
+  { unique: true, partialFilterExpression: { "payoutAccount.stripeAccountId": { $type: "string" } } }
 );
 
 restaurantSchema.pre("validate", function normalizeSlug() {

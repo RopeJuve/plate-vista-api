@@ -66,6 +66,10 @@ _Avoid_: Check, tab, order (an order is one round on the bill)
 Settling a bill, in cash, by card at the restaurant's terminal, or online; recorded by staff, or by the payment provider for online payments, never by the guest's device.
 _Avoid_: Checkout (in product language), transaction (a transaction is the till's record)
 
+**Payout Account**:
+The restaurant's own account at Stripe, which guests' online payments are paid into. The owner sets it up from the dashboard on a Stripe-hosted page, and only the owner may manage it.
+_Avoid_: Connect account, Stripe account (in product language)
+
 **Receipt**:
 The guest's record of a payment: what was bought, VAT per rate, total, payment method, and the TSE signature. Guests open it by link or QR code, without signing in.
 _Avoid_: Invoice, Beleg (in English copy), bill
