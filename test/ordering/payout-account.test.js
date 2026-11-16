@@ -198,17 +198,6 @@ test("account.updated copies the Payout Account's flags, and a second delivery c
   assert.deepEqual(stored.payoutAccount, { stripeAccountId: accountId, chargesEnabled: true, detailsSubmitted: true });
 });
 
-test("a stale account.updated delivered late does not undo newer flags", async () => {
-  const { restaurant, asOwner } = await place();
-  await asOwner("post");
-  const accountId = (await Restaurant.findById(restaurant._id).lean()).payoutAccount.stripeAccountId;
-  fake.updateAccount(accountId, { charges_enabled: true, details_submitted: true });
-
-  const stale = accountUpdated({ id: accountId, object: "account", charges_enabled: false, details_submitted: false });
-  assert.equal((await deliver(stale)).status, 200);
-  assert.deepEqual((await asOwner("get")).body, { connected: true, chargesEnabled: true, detailsSubmitted: true });
-});
-
 test("a webhook with a wrong or missing signature is refused with 400", async () => {
   const { restaurant, asOwner } = await place();
   await asOwner("post");

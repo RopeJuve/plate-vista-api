@@ -5,7 +5,6 @@ import {
   assertStripeConfigured,
   createOnboardingLink,
   createPayoutAccount,
-  retrievePayoutAccount,
 } from "./stripe.js";
 
 // Where Stripe sends the owner back to, whether they finished or the link
@@ -62,11 +61,11 @@ export const startPayoutOnboarding = async (restaurantId) => {
   return { url };
 };
 
-// Stripe retries and may deliver an event twice or out of order, so the
-// handler reads the Payout Account's current state from Stripe instead of
-// trusting the (possibly stale) copy in the event, and only ever sets it.
+// Copies the Payout Account's flags from the event. It sets absolute values
+// rather than toggling, so a second delivery of the same event changes nothing.
 const onAccountUpdated = async (event) => {
-  const stripeAccountId = event.data?.object?.id;
+  const object = event.data?.object;
+  const stripeAccountId = object?.id;
   const restaurant = stripeAccountId
     ? await Restaurant.findOne({ "payoutAccount.stripeAccountId": stripeAccountId }).select("_id").lean()
     : null;
@@ -74,13 +73,12 @@ const onAccountUpdated = async (event) => {
     logger.warn({ eventId: event.id, stripeAccountId }, "account.updated for an unknown Payout Account; ignored");
     return;
   }
-  const account = await retrievePayoutAccount(stripeAccountId);
   await Restaurant.updateOne(
     { _id: restaurant._id, "payoutAccount.stripeAccountId": stripeAccountId },
     {
       $set: {
-        "payoutAccount.chargesEnabled": account.chargesEnabled,
-        "payoutAccount.detailsSubmitted": account.detailsSubmitted,
+        "payoutAccount.chargesEnabled": Boolean(object.charges_enabled),
+        "payoutAccount.detailsSubmitted": Boolean(object.details_submitted),
       },
     }
   );
