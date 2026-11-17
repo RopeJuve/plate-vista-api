@@ -1846,6 +1846,44 @@ test("image uploads are signed for the restaurant's own Cloudinary folder", asyn
   }
 });
 
+test("a guest message sent while the socket's session is still being checked is not lost", async () => {
+  const place = await fixture();
+  const session = await openOrJoinSessionSafe(place.restaurant._id, place.table._id);
+  // Hold the connection's session lookup until the first message is on the wire.
+  const realFindOne = TableSession.findOne;
+  let releaseLookup;
+  const lookupHeld = new Promise((resolve) => {
+    releaseLookup = resolve;
+  });
+  TableSession.findOne = function (...args) {
+    TableSession.findOne = realFindOne;
+    return lookupHeld.then(() => realFindOne.apply(this, args));
+  };
+  try {
+    const guest = await connect(generateTableToken({
+      restaurantId: place.restaurant._id,
+      tableId: place.table._id,
+      sessionId: session._id,
+    }));
+    const requestId = randomUUID();
+    guest.ws.send(JSON.stringify({
+      type: "order.create",
+      requestId,
+      payload: { clientOrderId: randomUUID(), items: itemsOf(place.item) },
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    releaseLookup();
+    const ack = await waitFor(
+      guest.messages,
+      (message) => message.type === "ack" && message.requestId === requestId
+    );
+    assert.equal(ack.ok, true, JSON.stringify(ack));
+  } finally {
+    TableSession.findOne = realFindOne;
+    releaseLookup();
+  }
+});
+
 test("out of stock, validation, and permission errors include structured details", async () => {
   const place = await fixture();
   const other = await Table.create({
