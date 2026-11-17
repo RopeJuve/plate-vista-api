@@ -6,6 +6,7 @@
 //   fake.updateAccount(id, accountState({ cardPayments: "active" }));  // what Stripe would know
 //   fake.signedEvent(event, secret);                      // { body, signature }
 //   fake.calls;                                           // [["v2.core.accounts.create", params, options], ...]
+//   fake.failNext("checkout.sessions.create");            // the next such call throws a Stripe error
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 class StripeSignatureVerificationError extends Error {
@@ -62,6 +63,17 @@ const verify = (payload, header, secret) => {
 export const createFakeStripe = () => {
   const store = new Map();
   const calls = [];
+  const failing = new Set();
+  // Stripe replays the first response for a repeated idempotency key.
+  const idempotent = new Map();
+
+  const maybeFail = (op) => {
+    if (!failing.delete(op)) return;
+    const error = new Error("Something went wrong on Stripe's end");
+    error.type = "StripeAPIError";
+    error.statusCode = 500;
+    throw error;
+  };
 
   const account = (id) => {
     const found = store.get(id);
@@ -77,6 +89,10 @@ export const createFakeStripe = () => {
   return {
     calls,
     accountsCreated: () => calls.filter(([op]) => op === "v2.core.accounts.create").length,
+    checkoutSessionsCreated: () => calls.filter(([op]) => op === "checkout.sessions.create").length,
+    failNext(op) {
+      failing.add(op);
+    },
     updateAccount(id, fields) {
       store.set(id, { ...account(id), ...fields });
     },
@@ -115,6 +131,34 @@ export const createFakeStripe = () => {
               url: `https://connect.stripe.test/setup/e/${params.account}/${randomBytes(6).toString("hex")}`,
             };
           },
+        },
+      },
+    },
+    checkout: {
+      sessions: {
+        async create(params, options = {}) {
+          calls.push(["checkout.sessions.create", params, options]);
+          maybeFail("checkout.sessions.create");
+          const key = options.idempotencyKey && `${options.stripeAccount}|${options.idempotencyKey}`;
+          if (key && idempotent.has(key)) return { ...idempotent.get(key) };
+          const id = `cs_test_${randomBytes(12).toString("hex")}`;
+          const amountTotal = params.line_items.reduce(
+            (sum, line) => sum + line.price_data.unit_amount * line.quantity,
+            0
+          );
+          const session = {
+            id,
+            object: "checkout.session",
+            mode: params.mode,
+            amount_total: amountTotal,
+            currency: params.line_items[0]?.price_data.currency,
+            expires_at: params.expires_at,
+            metadata: params.metadata,
+            status: "open",
+            url: `https://checkout.stripe.test/c/pay/${id}`,
+          };
+          if (key) idempotent.set(key, session);
+          return { ...session };
         },
       },
     },

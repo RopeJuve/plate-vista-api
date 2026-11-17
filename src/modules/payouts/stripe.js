@@ -35,6 +35,13 @@ export const assertStripeConfigured = () => {
   if (!process.env.DASHBOARD_URL) throw notConfigured();
 };
 
+// Throws STRIPE_NOT_CONFIGURED unless the server can reach Stripe and build
+// the URLs that send a guest back to their table.
+export const assertOnlinePaymentsConfigured = () => {
+  client();
+  if (!process.env.GUEST_APP_URL) throw notConfigured();
+};
+
 // Requirements the owner still has to fill in before Stripe can decide.
 const OWNER_DUE = new Set(["currently_due", "past_due"]);
 
@@ -110,6 +117,45 @@ export const createOnboardingLink = async ({ stripeAccountId, refreshUrl, return
     },
   });
   return link.url;
+};
+
+// A Stripe Checkout Session for the whole bill, as a direct charge on the
+// restaurant's Payout Account (ADR-0006). Each line is one receipt line, so
+// Stripe's total is the bill's. A repeated attemptId returns the Checkout
+// Session Stripe made the first time instead of a second one.
+export const createOnlinePaymentCheckout = async ({
+  stripeAccountId,
+  attemptId,
+  lines,
+  amountCents,
+  applicationFeeCents,
+  expiresAt,
+  successUrl,
+  cancelUrl,
+  metadata,
+}) => {
+  const checkout = await client().checkout.sessions.create(
+    {
+      mode: "payment",
+      line_items: lines.map((line) => ({
+        quantity: line.quantity,
+        price_data: {
+          currency: "eur",
+          unit_amount: line.unitPriceCents,
+          product_data: { name: line.title },
+        },
+      })),
+      expires_at: Math.floor(expiresAt.getTime() / 1000),
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+      metadata: { ...metadata, amountCents: String(amountCents) },
+      ...(applicationFeeCents > 0
+        ? { payment_intent_data: { application_fee_amount: applicationFeeCents } }
+        : {}),
+    },
+    { stripeAccount: stripeAccountId, idempotencyKey: `online-payment-${attemptId}` }
+  );
+  return { checkoutSessionId: checkout.id, url: checkout.url };
 };
 
 // Verifies a thin event notification (Accounts v2 events arrive this way)

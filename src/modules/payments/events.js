@@ -53,3 +53,11 @@ export const publishPaymentSignFailed = (payment) =>
     audience: "staff",
     message: event("payment.signFailed", { paymentId: String(payment._id) }),
   });
+
+// The bill is frozen while a guest pays online (PROTOCOL 2.5).
+export const publishBillFrozen = ({ restaurantId, sessionId, expiresAt }) =>
+  send({
+    restaurantId,
+    sessionId,
+    message: event("bill.frozen", { sessionId: String(sessionId), expiresAt: expiresAt.toISOString() }),
+  });

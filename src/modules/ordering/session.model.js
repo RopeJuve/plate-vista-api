@@ -22,6 +22,22 @@ const sessionSchema = new Schema(
     // Set when an owner or admin closed the table with its bill unpaid.
     unpaidCloseReason: { type: String },
     unpaidClosedBy: { type: Schema.Types.ObjectId, ref: "Employee" },
+    // The online payment a guest started, while the session is `paying`.
+    // `attemptId` names this start, so Stripe sees a retry of the same start
+    // as the same request; Stripe's id and url arrive after the freeze.
+    onlinePayment: {
+      type: new Schema(
+        {
+          attemptId: { type: String, required: true },
+          checkoutSessionId: { type: String },
+          url: { type: String },
+          amountCents: { type: Number, required: true },
+          expiresAt: { type: Date, required: true },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
   },
   { timestamps: true }
 );
