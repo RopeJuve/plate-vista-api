@@ -157,7 +157,7 @@ Every route here answers 503 `STRIPE_NOT_CONFIGURED` when the server has no Stri
 ```
 POST  /restaurant/payout-account  -> 200 { url }          // Stripe-hosted onboarding; send the browser there
 GET   /restaurant/payout-account  -> 200 PayoutAccount
-PATCH /restaurant/payout-account  { onlinePaymentsEnabled: bool } -> 200 PayoutAccount | 400 VALIDATION
+PATCH /restaurant/payout-account  { onlinePaymentsEnabled: bool } -> 200 PayoutAccount | 400 VALIDATION | 409 PAYOUT_ACCOUNT_MISSING
 ```
 
 ```ts
@@ -233,6 +233,7 @@ OnlinePaymentRefund = {
 |---|---|---|
 | `STRIPE_NOT_CONFIGURED` | 503 | the server has no Stripe keys |
 | `ONLINE_PAYMENT_UNAVAILABLE` | 409 | start while `canPayOnline` is false |
+| `PAYOUT_ACCOUNT_MISSING` | 409 | switching online payments before onboarding started (`connected: false`) |
 | `PAYMENT_PROVIDER_ERROR` | 502 | Stripe failed when starting |
 | `BILL_FROZEN` | 409 | order or ticket cancel while the bill is frozen |
 | `BILL_PAYING_ONLINE` | 409 | unfreeze, staff payment or close when the guest has just paid online |

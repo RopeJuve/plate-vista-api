@@ -1,7 +1,12 @@
 import express from "express";
 import { asyncRoute } from "../../shared/asyncRoute.js";
 import { requireAuth, requireRole, requireTenant } from "../staff/auth.middleware.js";
-import { getPayoutAccount, handleStripeEvent, startPayoutOnboarding } from "./payout.service.js";
+import {
+  getPayoutAccount,
+  handleStripeEvent,
+  startPayoutOnboarding,
+  updatePayoutAccount,
+} from "./payout.service.js";
 import { constructWebhookEvent } from "./stripe.js";
 
 // Mounted under /api/v1/restaurant. The Payout Account is where the
@@ -15,6 +20,10 @@ payoutAccountRouter.post("/payout-account", ...ownerOnly, asyncRoute(async (req,
 
 payoutAccountRouter.get("/payout-account", ...ownerOnly, asyncRoute(async (req, res) => {
   res.status(200).json(await getPayoutAccount(req.tenant.restaurantId));
+}));
+
+payoutAccountRouter.patch("/payout-account", ...ownerOnly, asyncRoute(async (req, res) => {
+  res.status(200).json(await updatePayoutAccount(req.tenant.restaurantId, req.body));
 }));
 
 // Mounted in app.js before express.json(): the signature is over the raw

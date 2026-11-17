@@ -1,6 +1,9 @@
 import Restaurant from "../restaurants/restaurant.model.js";
 import { AppError } from "../../shared/errors.js";
 import { logger } from "../../shared/logger.js";
+import { parseOrThrow } from "../../shared/validate.js";
+import { isTseActive } from "../tse/tse.service.js";
+import { updatePayoutAccountSchema } from "./payout.schemas.js";
 import {
   assertStripeConfigured,
   createOnboardingLink,
@@ -19,6 +22,9 @@ export const serializePayoutAccount = (restaurant) => {
     connected: Boolean(account?.stripeAccountId),
     chargesEnabled: Boolean(account?.chargesEnabled),
     detailsSubmitted: Boolean(account?.detailsSubmitted),
+    // On unless the owner switched it off; accounts saved before the switch
+    // existed have no value and read as on.
+    onlinePaymentsEnabled: account?.onlinePaymentsEnabled !== false,
   };
 };
 
@@ -27,6 +33,34 @@ export const getPayoutAccount = async (restaurantId) => {
   const restaurant = await Restaurant.findById(restaurantId).select("payoutAccount").lean();
   if (!restaurant) throw notFound();
   return serializePayoutAccount(restaurant);
+};
+
+// The owner switches online payments off or on. There is nothing to switch
+// before the Payout Account exists.
+export const updatePayoutAccount = async (restaurantId, input) => {
+  assertStripeConfigured();
+  const { onlinePaymentsEnabled } = parseOrThrow(updatePayoutAccountSchema, input);
+  const restaurant = await Restaurant.findById(restaurantId).select("payoutAccount").lean();
+  if (!restaurant) throw notFound();
+  const updated = await Restaurant.findOneAndUpdate(
+    { _id: restaurantId, "payoutAccount.stripeAccountId": { $type: "string" } },
+    { $set: { "payoutAccount.onlinePaymentsEnabled": onlinePaymentsEnabled } },
+    { new: true, projection: { payoutAccount: 1 } }
+  ).lean();
+  if (!updated) {
+    throw new AppError("PAYOUT_ACCOUNT_MISSING", "Set up the Payout Account first");
+  }
+  return serializePayoutAccount(updated);
+};
+
+// Whether a guest may pay this bill online right now. Only the answer leaves
+// this function; guests never learn why or anything about the Payout Account.
+export const canPayBillOnline = async (restaurantId, bill) => {
+  if (!process.env.STRIPE_SECRET_KEY) return false;
+  if (bill.session?.status !== "open" || bill.payment || !(bill.totalCents > 0)) return false;
+  const restaurant = await Restaurant.findById(restaurantId).select("payoutAccount tse.setupStep").lean();
+  const account = serializePayoutAccount(restaurant);
+  return account.chargesEnabled && account.onlinePaymentsEnabled && isTseActive(restaurant);
 };
 
 // The Payout Account is created once; every later call reuses it, so an owner

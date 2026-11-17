@@ -175,7 +175,7 @@ test("a restaurant without a Payout Account reads as not connected", async () =>
   const { asOwner } = await place();
   const res = await asOwner("get");
   assert.equal(res.status, 200);
-  assert.deepEqual(res.body, { connected: false, chargesEnabled: false, detailsSubmitted: false });
+  assert.deepEqual(res.body, { connected: false, chargesEnabled: false, detailsSubmitted: false, onlinePaymentsEnabled: true });
 });
 
 test("account.updated copies the Payout Account's flags, and a second delivery changes nothing", async () => {
@@ -183,19 +183,19 @@ test("account.updated copies the Payout Account's flags, and a second delivery c
   await asOwner("post");
   const accountId = (await Restaurant.findById(restaurant._id).lean()).payoutAccount.stripeAccountId;
 
-  assert.deepEqual((await asOwner("get")).body, { connected: true, chargesEnabled: false, detailsSubmitted: false });
+  assert.deepEqual((await asOwner("get")).body, { connected: true, chargesEnabled: false, detailsSubmitted: false, onlinePaymentsEnabled: true });
 
   fake.updateAccount(accountId, { charges_enabled: true, details_submitted: true });
   const event = accountUpdated({ id: accountId, object: "account", charges_enabled: true, details_submitted: true });
 
   const once = await deliver(event);
   assert.equal(once.status, 200, JSON.stringify(once.body));
-  assert.deepEqual((await asOwner("get")).body, { connected: true, chargesEnabled: true, detailsSubmitted: true });
+  assert.deepEqual((await asOwner("get")).body, { connected: true, chargesEnabled: true, detailsSubmitted: true, onlinePaymentsEnabled: true });
 
   const twice = await deliver(event);
   assert.equal(twice.status, 200);
   const stored = await Restaurant.findById(restaurant._id).lean();
-  assert.deepEqual(stored.payoutAccount, { stripeAccountId: accountId, chargesEnabled: true, detailsSubmitted: true });
+  assert.deepEqual(stored.payoutAccount, { stripeAccountId: accountId, chargesEnabled: true, detailsSubmitted: true, onlinePaymentsEnabled: true });
 });
 
 test("a webhook with a wrong or missing signature is refused with 400", async () => {
@@ -214,7 +214,7 @@ test("a webhook with a wrong or missing signature is refused with 400", async ()
     .send(JSON.stringify(event));
   assert.equal(unsigned.status, 400);
 
-  assert.deepEqual((await asOwner("get")).body, { connected: true, chargesEnabled: false, detailsSubmitted: false });
+  assert.deepEqual((await asOwner("get")).body, { connected: true, chargesEnabled: false, detailsSubmitted: false, onlinePaymentsEnabled: true });
 });
 
 test("account.updated for an unknown account and unknown event types are acknowledged", async () => {

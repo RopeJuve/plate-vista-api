@@ -2200,6 +2200,7 @@ const AUTHENTICATED_ROUTES = [
   "POST /api/v1/restaurant/profile/logo-upload-signature",
   "GET /api/v1/restaurant/payout-account",
   "POST /api/v1/restaurant/payout-account",
+  "PATCH /api/v1/restaurant/payout-account",
   "GET /api/v1/tse",
   "POST /api/v1/tse/setup",
   "GET /api/v1/tse/failed",
@@ -2503,7 +2504,7 @@ test("cross-tenant lists, creates, stats, public menu, and sockets stay inside r
   try {
     const aPayout = await asOwnerA("get", "/api/v1/restaurant/payout-account");
     cover("GET", "/api/v1/restaurant/payout-account");
-    assert.deepEqual(aPayout.body, { connected: false, chargesEnabled: false, detailsSubmitted: false });
+    assert.deepEqual(aPayout.body, { connected: false, chargesEnabled: false, detailsSubmitted: false, onlinePaymentsEnabled: true });
     const aOnboarding = await asOwnerA("post", "/api/v1/restaurant/payout-account").send({ restaurantId: String(b.restaurant._id) });
     cover("POST", "/api/v1/restaurant/payout-account");
     assert.equal(aOnboarding.status, 200);
@@ -2514,6 +2515,14 @@ test("cross-tenant lists, creates, stats, public menu, and sockets stay inside r
       false
     );
     assert.equal((await Restaurant.findById(b.restaurant._id).lean()).payoutAccount.stripeAccountId, bStripeAccountId);
+    const aSwitch = await asOwnerA("patch", "/api/v1/restaurant/payout-account").send({
+      onlinePaymentsEnabled: false,
+      restaurantId: String(b.restaurant._id),
+    });
+    cover("PATCH", "/api/v1/restaurant/payout-account");
+    assert.equal(aSwitch.status, 200, JSON.stringify(aSwitch.body));
+    assert.equal((await Restaurant.findById(a.restaurant._id).lean()).payoutAccount.onlinePaymentsEnabled, false);
+    assert.notEqual((await Restaurant.findById(b.restaurant._id).lean()).payoutAccount.onlinePaymentsEnabled, false);
   } finally {
     setStripeClient(null);
     delete process.env.DASHBOARD_URL;
