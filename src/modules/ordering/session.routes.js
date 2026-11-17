@@ -9,6 +9,7 @@ import { getReceiptTokenForSession } from "../payments/receipt.service.js";
 import { receiptTokenLimiter } from "../../shared/rateLimiters.js";
 import { closeSessionSchema } from "../payments/payment.schemas.js";
 import { parseOrThrow } from "../../shared/validate.js";
+import { canPayBillOnline } from "../payouts/payout.service.js";
 
 const sessionRouter = express.Router();
 
@@ -24,7 +25,10 @@ sessionRouter.get(
     if (req.user.role === "guest" && req.user.sessionId !== req.params.id) {
       throw new AppError("NOT_FOUND", "Not found", 404);
     }
-    res.status(200).json(await getSessionBill(req.tenant, req.params.id));
+    const bill = await getSessionBill(req.tenant, req.params.id);
+    // Staff see it too, for information; only a guest acts on it.
+    const canPayOnline = await canPayBillOnline(req.tenant.restaurantId, bill);
+    res.status(200).json({ ...bill, canPayOnline });
   })
 );
 

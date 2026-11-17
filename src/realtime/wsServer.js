@@ -121,30 +121,47 @@ export const attachWebSocket = (server) => {
     connection.on("error", (error) => {
       logger.warn({ err: error }, "ws socket error");
     });
+    // The client may send as soon as it sees the socket open, while a guest's
+    // session is still being checked. Listen right away and hold those
+    // messages until the socket is admitted; ws drops frames nobody listens to.
+    let admitted = false;
+    let pending = [];
+    connection.on("message", (message) => {
+      if (admitted) handleMessage(message, connection, auth);
+      else pending?.push(message);
+    });
+    connection.on("close", () => {
+      pending = null;
+      leaveAll(connection);
+    });
     try {
       if (auth.role === "guest") {
         await assertOpenSession(auth.restaurantId, auth.sessionId);
-        join(sessionRoom(auth.restaurantId, auth.sessionId), connection);
-      } else {
-        join(staffRoom(auth.restaurantId), connection);
       }
     } catch (error) {
+      pending = null;
       const closed = error instanceof AppError && error.code === "SESSION_CLOSED";
       logger.error({ err: error, restaurantId: auth.restaurantId }, "ws connection rejected");
       connection.close(closed ? 4004 : 4003, closed ? "session closed" : "forbidden");
       return;
     }
+    // Closed while we waited: joining now would leave it in the room for good.
+    if (pending === null) return;
 
+    join(
+      auth.role === "guest"
+        ? sessionRoom(auth.restaurantId, auth.sessionId)
+        : staffRoom(auth.restaurantId),
+      connection
+    );
     connection.isAlive = true;
     connection.on("pong", () => {
       connection.isAlive = true;
     });
-    connection.on("message", (message) => {
-      handleMessage(message, connection, auth);
-    });
-    connection.on("close", () => {
-      leaveAll(connection);
-    });
+    admitted = true;
+    const held = pending;
+    pending = null;
+    for (const message of held) handleMessage(message, connection, auth);
   });
 
   const heartbeat = setInterval(() => {

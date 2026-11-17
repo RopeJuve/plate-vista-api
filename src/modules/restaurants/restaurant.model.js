@@ -86,6 +86,8 @@ const restaurantSchema = new Schema(
           stripeAccountId: { type: String, required: true },
           chargesEnabled: { type: Boolean, default: false },
           detailsSubmitted: { type: Boolean, default: false },
+          // The owner's switch; guests can pay online only while it is on.
+          onlinePaymentsEnabled: { type: Boolean, default: true },
         },
         { _id: false }
       ),

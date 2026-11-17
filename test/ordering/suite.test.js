@@ -1846,6 +1846,44 @@ test("image uploads are signed for the restaurant's own Cloudinary folder", asyn
   }
 });
 
+test("a guest message sent while the socket's session is still being checked is not lost", async () => {
+  const place = await fixture();
+  const session = await openOrJoinSessionSafe(place.restaurant._id, place.table._id);
+  // Hold the connection's session lookup until the first message is on the wire.
+  const realFindOne = TableSession.findOne;
+  let releaseLookup;
+  const lookupHeld = new Promise((resolve) => {
+    releaseLookup = resolve;
+  });
+  TableSession.findOne = function (...args) {
+    TableSession.findOne = realFindOne;
+    return lookupHeld.then(() => realFindOne.apply(this, args));
+  };
+  try {
+    const guest = await connect(generateTableToken({
+      restaurantId: place.restaurant._id,
+      tableId: place.table._id,
+      sessionId: session._id,
+    }));
+    const requestId = randomUUID();
+    guest.ws.send(JSON.stringify({
+      type: "order.create",
+      requestId,
+      payload: { clientOrderId: randomUUID(), items: itemsOf(place.item) },
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    releaseLookup();
+    const ack = await waitFor(
+      guest.messages,
+      (message) => message.type === "ack" && message.requestId === requestId
+    );
+    assert.equal(ack.ok, true, JSON.stringify(ack));
+  } finally {
+    TableSession.findOne = realFindOne;
+    releaseLookup();
+  }
+});
+
 test("out of stock, validation, and permission errors include structured details", async () => {
   const place = await fixture();
   const other = await Table.create({
@@ -2200,6 +2238,7 @@ const AUTHENTICATED_ROUTES = [
   "POST /api/v1/restaurant/profile/logo-upload-signature",
   "GET /api/v1/restaurant/payout-account",
   "POST /api/v1/restaurant/payout-account",
+  "PATCH /api/v1/restaurant/payout-account",
   "GET /api/v1/tse",
   "POST /api/v1/tse/setup",
   "GET /api/v1/tse/failed",
@@ -2503,7 +2542,7 @@ test("cross-tenant lists, creates, stats, public menu, and sockets stay inside r
   try {
     const aPayout = await asOwnerA("get", "/api/v1/restaurant/payout-account");
     cover("GET", "/api/v1/restaurant/payout-account");
-    assert.deepEqual(aPayout.body, { connected: false, chargesEnabled: false, detailsSubmitted: false });
+    assert.deepEqual(aPayout.body, { connected: false, chargesEnabled: false, detailsSubmitted: false, onlinePaymentsEnabled: true });
     const aOnboarding = await asOwnerA("post", "/api/v1/restaurant/payout-account").send({ restaurantId: String(b.restaurant._id) });
     cover("POST", "/api/v1/restaurant/payout-account");
     assert.equal(aOnboarding.status, 200);
@@ -2514,6 +2553,14 @@ test("cross-tenant lists, creates, stats, public menu, and sockets stay inside r
       false
     );
     assert.equal((await Restaurant.findById(b.restaurant._id).lean()).payoutAccount.stripeAccountId, bStripeAccountId);
+    const aSwitch = await asOwnerA("patch", "/api/v1/restaurant/payout-account").send({
+      onlinePaymentsEnabled: false,
+      restaurantId: String(b.restaurant._id),
+    });
+    cover("PATCH", "/api/v1/restaurant/payout-account");
+    assert.equal(aSwitch.status, 200, JSON.stringify(aSwitch.body));
+    assert.equal((await Restaurant.findById(a.restaurant._id).lean()).payoutAccount.onlinePaymentsEnabled, false);
+    assert.notEqual((await Restaurant.findById(b.restaurant._id).lean()).payoutAccount.onlinePaymentsEnabled, false);
   } finally {
     setStripeClient(null);
     delete process.env.DASHBOARD_URL;
