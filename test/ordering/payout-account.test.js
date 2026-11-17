@@ -11,11 +11,13 @@ import { generateTableToken, generateToken, hashPassword } from "../../src/share
 import Restaurant from "../../src/modules/restaurants/restaurant.model.js";
 import Employee from "../../src/modules/staff/employee.model.js";
 import { setStripeClient } from "../../src/modules/payouts/stripe.js";
-import { createFakeStripe } from "../support/fakeStripe.js";
+import { accountState, createFakeStripe } from "../support/fakeStripe.js";
 
 const WEBHOOK_SECRET = "whsec_test_payouts";
+const ACCOUNT_WEBHOOK_SECRET = "whsec_test_payout_account_events";
 const STRIPE_ENV = {
   STRIPE_WEBHOOK_SECRET: WEBHOOK_SECRET,
+  STRIPE_ACCOUNT_WEBHOOK_SECRET: ACCOUNT_WEBHOOK_SECRET,
   DASHBOARD_URL: "https://dashboard.example.com",
   GUEST_APP_URL: "https://guest.example.com",
 };
@@ -56,22 +58,31 @@ const place = async () => {
   };
 };
 
-const accountUpdated = (account, id = `evt_${randomUUID()}`) => ({
+// A thin event notification, as an Accounts v2 event destination sends it.
+const accountEvent = (stripeAccountId, type = "v2.core.account[requirements].updated", id = `evt_${randomUUID()}`) => ({
   id,
-  object: "event",
-  type: "account.updated",
-  data: { object: account },
+  object: "v2.core.event",
+  type,
+  livemode: false,
+  created: new Date().toISOString(),
+  context: null,
+  related_object: { id: stripeAccountId, type: "v2.core.account", url: `/v2/core/accounts/${stripeAccountId}` },
 });
 
-const deliver = (event, { secret = WEBHOOK_SECRET } = {}) => {
+const post = (path, event, secret) => {
   const { body, signature } = fake.signedEvent(event, secret);
   return request(app)
-    .post("/api/v1/webhooks/stripe")
+    .post(path)
     .set("Content-Type", "application/json")
     .set("Stripe-Signature", signature)
     .send(body);
 };
 
+const deliver = (event, { secret = WEBHOOK_SECRET } = {}) => post("/api/v1/webhooks/stripe", event, secret);
+const deliverAccountEvent = (event, { secret = ACCOUNT_WEBHOOK_SECRET } = {}) =>
+  post("/api/v1/webhooks/stripe/accounts", event, secret);
+
+const storedAccount = async (restaurant) => (await Restaurant.findById(restaurant._id).lean()).payoutAccount;
 
 test.before(async () => {
   mongod = await MongoMemoryServer.create();
@@ -108,13 +119,14 @@ test("without Stripe settings the Payout Account routes and the webhook answer 5
     await asOwner("post"),
     await asOwner("get"),
     await request(app).post("/api/v1/webhooks/stripe").set("Content-Type", "application/json").send("{}"),
+    await request(app).post("/api/v1/webhooks/stripe/accounts").set("Content-Type", "application/json").send("{}"),
   ]) {
     assert.equal(res.status, 503, JSON.stringify(res.body));
     assert.equal(res.body.code, "STRIPE_NOT_CONFIGURED");
   }
 });
 
-test("the owner gets an onboarding link for a new Express Payout Account in Germany", async () => {
+test("the owner gets an onboarding link for a new Accounts v2 Payout Account in Germany where Stripe carries losses", async () => {
   const { restaurant, asOwner } = await place();
 
   const res = await asOwner("post");
@@ -122,26 +134,38 @@ test("the owner gets an onboarding link for a new Express Payout Account in Germ
   assert.deepEqual(Object.keys(res.body), ["url"]);
   assert.match(res.body.url, /^https:\/\/connect\.stripe\.test\//);
 
-  const [create] = fake.calls.filter(([op]) => op === "accounts.create");
-  assert.equal(create[1].type, "express");
-  assert.equal(create[1].country, "DE");
-  assert.deepEqual(create[1].capabilities, {
-    card_payments: { requested: true },
-    transfers: { requested: true },
+  const [create] = fake.calls.filter(([op]) => op === "v2.core.accounts.create");
+  const [, params, options] = create;
+  // No legacy account `type`: Stripe refuses it when the platform would carry losses.
+  assert.equal("type" in params, false);
+  assert.equal(params.dashboard, "full");
+  assert.deepEqual(params.identity, { country: "de" });
+  assert.deepEqual(params.configuration, { merchant: { capabilities: { card_payments: { requested: true } } } });
+  assert.deepEqual(params.defaults, {
+    currency: "eur",
+    responsibilities: { fees_collector: "stripe", losses_collector: "stripe" },
   });
+  assert.deepEqual(params.metadata, { restaurantId: String(restaurant._id) });
+  assert.deepEqual(params.include, ["configuration.merchant", "requirements"]);
+  assert.equal(options.idempotencyKey, `payout-account-v2-${restaurant._id}`);
 
-  const stored = await Restaurant.findById(restaurant._id).lean();
-  const accountId = stored.payoutAccount.stripeAccountId;
+  const stored = await storedAccount(restaurant);
+  const accountId = stored.stripeAccountId;
   assert.match(accountId, /^acct_/);
-  assert.equal(stored.payoutAccount.chargesEnabled, false);
-  assert.equal(stored.payoutAccount.detailsSubmitted, false);
+  assert.equal(stored.chargesEnabled, false);
+  assert.equal(stored.detailsSubmitted, false);
 
-  const [link] = fake.calls.filter(([op]) => op === "accountLinks.create");
+  const [link] = fake.calls.filter(([op]) => op === "v2.core.accountLinks.create");
   assert.deepEqual(link[1], {
     account: accountId,
-    type: "account_onboarding",
-    refresh_url: "https://dashboard.example.com/settings/payout-account",
-    return_url: "https://dashboard.example.com/settings/payout-account",
+    use_case: {
+      type: "account_onboarding",
+      account_onboarding: {
+        collection_options: { fields: "eventually_due" },
+        refresh_url: "https://dashboard.example.com/settings/payout-account",
+        return_url: "https://dashboard.example.com/settings/payout-account",
+      },
+    },
   });
 });
 
@@ -154,7 +178,7 @@ test("a second POST reuses the Payout Account and returns a fresh link", async (
   assert.equal(fake.accountsCreated(), 1);
 
   const stored = await Restaurant.findById(restaurant._id).lean();
-  const links = fake.calls.filter(([op]) => op === "accountLinks.create");
+  const links = fake.calls.filter(([op]) => op === "v2.core.accountLinks.create");
   assert.deepEqual(links.map(([, params]) => params.account), [
     stored.payoutAccount.stripeAccountId,
     stored.payoutAccount.stripeAccountId,
@@ -178,53 +202,108 @@ test("a restaurant without a Payout Account reads as not connected", async () =>
   assert.deepEqual(res.body, { connected: false, chargesEnabled: false, detailsSubmitted: false, onlinePaymentsEnabled: true });
 });
 
-test("account.updated copies the Payout Account's flags, and a second delivery changes nothing", async () => {
+test("reading the Payout Account asks Stripe until it can take payments: unfinished, under review, ready", async () => {
   const { restaurant, asOwner } = await place();
   await asOwner("post");
-  const accountId = (await Restaurant.findById(restaurant._id).lean()).payoutAccount.stripeAccountId;
+  const accountId = (await storedAccount(restaurant)).stripeAccountId;
+  const read = async () => (await asOwner("get")).body;
+  const retrieves = () => fake.calls.filter(([op]) => op === "v2.core.accounts.retrieve").length;
 
-  assert.deepEqual((await asOwner("get")).body, { connected: true, chargesEnabled: false, detailsSubmitted: false, onlinePaymentsEnabled: true });
+  assert.deepEqual(await read(), { connected: true, chargesEnabled: false, detailsSubmitted: false, onlinePaymentsEnabled: true });
 
-  fake.updateAccount(accountId, { charges_enabled: true, details_submitted: true });
-  const event = accountUpdated({ id: accountId, object: "account", charges_enabled: true, details_submitted: true });
+  fake.updateAccount(accountId, accountState({ cardPayments: "pending", ownerDue: false }));
+  assert.deepEqual(await read(), { connected: true, chargesEnabled: false, detailsSubmitted: true, onlinePaymentsEnabled: true });
 
-  const once = await deliver(event);
-  assert.equal(once.status, 200, JSON.stringify(once.body));
-  assert.deepEqual((await asOwner("get")).body, { connected: true, chargesEnabled: true, detailsSubmitted: true, onlinePaymentsEnabled: true });
+  fake.updateAccount(accountId, accountState({ cardPayments: "active", ownerDue: false }));
+  assert.deepEqual(await read(), { connected: true, chargesEnabled: true, detailsSubmitted: true, onlinePaymentsEnabled: true });
+  const [, , params] = fake.calls.findLast(([op]) => op === "v2.core.accounts.retrieve");
+  assert.deepEqual(params, { include: ["configuration.merchant", "requirements"] });
 
-  const twice = await deliver(event);
-  assert.equal(twice.status, 200);
-  const stored = await Restaurant.findById(restaurant._id).lean();
-  assert.deepEqual(stored.payoutAccount, { stripeAccountId: accountId, chargesEnabled: true, detailsSubmitted: true, onlinePaymentsEnabled: true });
+  // Ready: later changes come by event, so reads stop asking Stripe.
+  const before = retrieves();
+  await read();
+  assert.equal(retrieves(), before);
 });
 
-test("a webhook with a wrong or missing signature is refused with 400", async () => {
+test("when Stripe cannot be read, the owner sees the stored status", async () => {
+  const { restaurant, asOwner } = await place();
+  await Restaurant.updateOne(
+    { _id: restaurant._id },
+    { $set: { payoutAccount: { stripeAccountId: "acct_gone", chargesEnabled: false, detailsSubmitted: true } } }
+  );
+  const res = await asOwner("get");
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.deepEqual(res.body, { connected: true, chargesEnabled: false, detailsSubmitted: true, onlinePaymentsEnabled: true });
+});
+
+test("an account event stores the Payout Account's state as Stripe has it, and a second delivery changes nothing", async () => {
   const { restaurant, asOwner } = await place();
   await asOwner("post");
-  const accountId = (await Restaurant.findById(restaurant._id).lean()).payoutAccount.stripeAccountId;
-  fake.updateAccount(accountId, { charges_enabled: true, details_submitted: true });
-  const event = accountUpdated({ id: accountId, object: "account", charges_enabled: true, details_submitted: true });
+  const accountId = (await storedAccount(restaurant)).stripeAccountId;
+  fake.updateAccount(accountId, accountState({ cardPayments: "active", ownerDue: false }));
+  const event = accountEvent(accountId, "v2.core.account[configuration.merchant].capability_status_updated");
 
-  const forged = await deliver(event, { secret: "whsec_someone_else" });
-  assert.equal(forged.status, 400);
+  const once = await deliverAccountEvent(event);
+  assert.equal(once.status, 200, JSON.stringify(once.body));
+  assert.deepEqual(await storedAccount(restaurant), {
+    stripeAccountId: accountId,
+    chargesEnabled: true,
+    detailsSubmitted: true,
+    onlinePaymentsEnabled: true,
+  });
 
+  const twice = await deliverAccountEvent(event);
+  assert.equal(twice.status, 200);
+  assert.deepEqual(await storedAccount(restaurant), {
+    stripeAccountId: accountId,
+    chargesEnabled: true,
+    detailsSubmitted: true,
+    onlinePaymentsEnabled: true,
+  });
+
+  // A capability Stripe restricts later turns online payments off again.
+  fake.updateAccount(accountId, accountState({ cardPayments: "restricted", ownerDue: true }));
+  await deliverAccountEvent(accountEvent(accountId));
+  const restricted = await storedAccount(restaurant);
+  assert.equal(restricted.chargesEnabled, false);
+  assert.equal(restricted.detailsSubmitted, false);
+});
+
+test("an account event with a wrong or missing signature is refused with 400", async () => {
+  const { restaurant, asOwner } = await place();
+  await asOwner("post");
+  const accountId = (await storedAccount(restaurant)).stripeAccountId;
+  fake.updateAccount(accountId, accountState({ cardPayments: "active", ownerDue: false }));
+  const event = accountEvent(accountId);
+
+  // The other destination's secret does not sign account events.
+  assert.equal((await deliverAccountEvent(event, { secret: WEBHOOK_SECRET })).status, 400);
   const unsigned = await request(app)
-    .post("/api/v1/webhooks/stripe")
+    .post("/api/v1/webhooks/stripe/accounts")
     .set("Content-Type", "application/json")
     .send(JSON.stringify(event));
   assert.equal(unsigned.status, 400);
 
-  assert.deepEqual((await asOwner("get")).body, { connected: true, chargesEnabled: false, detailsSubmitted: false, onlinePaymentsEnabled: true });
+  const stored = await storedAccount(restaurant);
+  assert.equal(stored.chargesEnabled, false);
 });
 
-test("account.updated for an unknown account and unknown event types are acknowledged", async () => {
-  const unknownAccount = await deliver(
-    accountUpdated({ id: "acct_nobody", object: "account", charges_enabled: true, details_submitted: true })
-  );
+test("account events for an unknown account or other objects, and unknown snapshot events, are acknowledged", async () => {
+  const unknownAccount = await deliverAccountEvent(accountEvent("acct_nobody"));
   assert.equal(unknownAccount.status, 200);
+
+  const otherObject = await deliverAccountEvent({
+    ...accountEvent("acct_nobody", "v1.billing.meter.no_meter_found"),
+    related_object: { id: "mtr_1", type: "billing.meter", url: "/v1/billing/meters/mtr_1" },
+  });
+  assert.equal(otherObject.status, 200);
+  assert.equal(fake.calls.some(([op]) => op === "v2.core.accounts.retrieve"), false);
 
   const unknownType = await deliver({ id: `evt_${randomUUID()}`, object: "event", type: "charge.refunded", data: { object: {} } });
   assert.equal(unknownType.status, 200);
+
+  const wrongSecret = await deliver({ id: `evt_${randomUUID()}`, object: "event", type: "charge.refunded", data: { object: {} } }, { secret: "whsec_someone_else" });
+  assert.equal(wrongSecret.status, 400);
 });
 
 test("JSON bodies still parse on other routes, and guests never see the Stripe account id", async () => {
