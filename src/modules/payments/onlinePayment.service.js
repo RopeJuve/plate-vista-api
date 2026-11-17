@@ -4,6 +4,7 @@ import Restaurant from "../restaurants/restaurant.model.js";
 import Table from "../tables/table.model.js";
 import TableSession from "../ordering/session.model.js";
 import { getBillLines, getSessionBill } from "../ordering/order.service.js";
+import { findSession } from "../ordering/session.service.js";
 import { canPayBillOnline } from "../payouts/payout.service.js";
 import { assertOnlinePaymentsConfigured, createOnlinePaymentCheckout } from "../payouts/stripe.js";
 import { mergeReceiptLines } from "./money.js";
@@ -101,6 +102,7 @@ const present = (attempt) => ({ url: attempt.url, expiresAt: attempt.expiresAt.t
 // bill freezes first, then Stripe makes the Checkout Session; anyone pressing
 // pay again while it runs gets the same one.
 export const startOnlinePayment = async (ctx, sessionId) => {
+  await findSession(ctx.restaurantId, sessionId);
   assertOnlinePaymentsConfigured();
   const { attempt, froze, tableId } = await freeze(ctx, sessionId);
   if (attempt.url) return present(attempt);

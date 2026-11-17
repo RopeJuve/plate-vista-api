@@ -72,11 +72,19 @@ const logFailure = (ctx, sessionId, error) => {
   captureException(error);
 };
 
+const billFrozen = () =>
+  new AppError("BILL_FROZEN", "A guest is paying this bill online; wait until the payment is done");
+
+// Only an open session takes orders: a paying one is frozen while a guest
+// pays online, a closed one is done.
+const assertTakesOrders = (session) => {
+  if (session.status === "paying") throw billFrozen();
+  if (session.status !== "open") throw new AppError("SESSION_CLOSED", "Session is closed");
+};
+
 const findOpenSession = async (restaurantId, sessionId, mongoSession) => {
   const session = await findSession(restaurantId, sessionId, mongoSession);
-  if (session.status !== "open") {
-    throw new AppError("SESSION_CLOSED", "Session is closed");
-  }
+  assertTakesOrders(session);
   return session;
 };
 
@@ -90,7 +98,9 @@ const resolveSession = async (ctx, payload, mongoSession) => {
     return { session, opened: false, tableNumber: null };
   }
   if (payload.tableId) {
-    return openOrJoinSession(ctx.restaurantId, payload.tableId, mongoSession);
+    const resolved = await openOrJoinSession(ctx.restaurantId, payload.tableId, mongoSession);
+    assertTakesOrders(resolved.session);
+    return resolved;
   }
   throw new AppError("VALIDATION", "sessionId or tableId is required", 400, {
     fields: { tableId: "sessionId or tableId is required" },
@@ -115,7 +125,7 @@ const touchOpenSession = async (restaurantId, sessionId, mongoSession) => {
     { $set: { lastOrderAt: new Date() } }
   ).session(mongoSession);
   if (result.matchedCount === 0) {
-    throw new AppError("SESSION_CLOSED", "Session is closed");
+    assertTakesOrders(await findSession(restaurantId, sessionId, mongoSession));
   }
 };
 
@@ -125,6 +135,13 @@ const touchOpenSession = async (restaurantId, sessionId, mongoSession) => {
 export const assertBillUnpaid = async (restaurantId, sessionId, mongoSession) => {
   const paid = await Payment.exists({ restaurantId, sessionId }).session(mongoSession);
   if (paid) throw new AppError("BILL_PAID", "This bill is paid");
+};
+
+// A frozen bill takes no cancellations while a guest pays it online. The
+// freeze writes the session document too, so a cancel racing it conflicts.
+const assertBillNotFrozen = async (restaurantId, sessionId, mongoSession) => {
+  const session = await findSession(restaurantId, sessionId, mongoSession);
+  if (session.status === "paying") throw billFrozen();
 };
 
 const quantityMap = (items, key) => {
@@ -445,6 +462,7 @@ export const cancelOrder = async (ctx, input) => {
       }
       const tickets = ticketsOf(current);
       await assertBillUnpaid(ctx.restaurantId, current.sessionId, mongoSession);
+      await assertBillNotFrozen(ctx.restaurantId, current.sessionId, mongoSession);
       await touchSession(ctx.restaurantId, current.sessionId, mongoSession);
       if (ctx.actor.type === "guest") {
         await assertBoundGuestSession(ctx, mongoSession);

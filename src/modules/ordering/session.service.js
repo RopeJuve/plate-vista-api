@@ -12,11 +12,15 @@ import { serializePayment } from "../payments/serialize.js";
 // Short code guests read to each other at the table. No 0/O or 1/I.
 const newJoinCode = customAlphabet("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", 4);
 
+// A session being paid online is still the table's visit: guests coming back
+// from Stripe, or scanning meanwhile, join it rather than open a second one.
+export const LIVE_STATUSES = ["open", "paying"];
+
 export const openOrJoinSession = async (restaurantId, tableId, mongoSession) => {
   const existingQuery = TableSession.findOne({
     restaurantId,
     tableId,
-    status: "open",
+    status: { $in: LIVE_STATUSES },
   });
   if (mongoSession) existingQuery.session(mongoSession);
   const existing = await existingQuery;
@@ -74,9 +78,20 @@ export const findSession = async (restaurantId, sessionId, mongoSession) => {
   return session;
 };
 
+// For a guest's order or cancel: a frozen bill takes neither.
 export const assertOpenSession = async (restaurantId, sessionId) => {
+  const session = await assertLiveSession(restaurantId, sessionId);
+  if (session.status === "paying") {
+    throw new AppError("BILL_FROZEN", "A guest is paying this bill online; wait until the payment is done");
+  }
+  return session;
+};
+
+// For a guest's socket: it stays in the session's room while the bill is
+// frozen, so it hears how the online payment ends.
+export const assertLiveSession = async (restaurantId, sessionId) => {
   const session = await findSession(restaurantId, sessionId);
-  if (session.status !== "open") {
+  if (!LIVE_STATUSES.includes(session.status)) {
     throw new AppError("SESSION_CLOSED", "Session is closed");
   }
   return session;
@@ -185,7 +200,7 @@ const billTotals = async (restaurantId, sessionIds) => {
 
 export const getBoard = async (restaurantId) => {
   const [sessions, closed] = await Promise.all([
-    TableSession.find({ restaurantId, status: "open" }).lean(),
+    TableSession.find({ restaurantId, status: { $in: LIVE_STATUSES } }).lean(),
     TableSession.find({
       restaurantId,
       status: "closed",

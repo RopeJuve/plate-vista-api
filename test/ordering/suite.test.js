@@ -2217,6 +2217,7 @@ const AUTHENTICATED_ROUTES = [
   "GET /api/v1/sessions/:id/receipt-token",
   "POST /api/v1/sessions/:id/close",
   "POST /api/v1/sessions/:id/payments",
+  "POST /api/v1/sessions/:id/online-payment",
   "GET /api/v1/table",
   "POST /api/v1/table",
   "GET /api/v1/table/:id",
@@ -2684,6 +2685,7 @@ test("cross-tenant lists, creates, stats, public menu, and sockets stay inside r
     ["get", `/api/v1/sessions/${orderB.order.sessionId}/receipt-token`, "GET /api/v1/sessions/:id/receipt-token"],
     ["post", `/api/v1/sessions/${orderB.order.sessionId}/close`, "POST /api/v1/sessions/:id/close"],
     ["post", `/api/v1/sessions/${orderB.order.sessionId}/payments`, "POST /api/v1/sessions/:id/payments"],
+    ["post", `/api/v1/sessions/${orderB.order.sessionId}/online-payment`, "POST /api/v1/sessions/:id/online-payment"],
   ];
   for (const [method, url, pattern] of missing) {
     const res = await asA(method, url).send({ inStock: false, capacity: 2, position: "kitchen" });

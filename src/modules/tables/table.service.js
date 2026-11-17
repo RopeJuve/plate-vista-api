@@ -2,7 +2,7 @@ import { nanoid } from "nanoid";
 import Restaurant from "../restaurants/restaurant.model.js";
 import Table from "./table.model.js";
 import TableSession from "../ordering/session.model.js";
-import { tableStatus } from "../ordering/session.service.js";
+import { LIVE_STATUSES, tableStatus } from "../ordering/session.service.js";
 import { AppError, isDuplicateKey } from "../../shared/errors.js";
 
 const withPath = async (table) => {
@@ -18,7 +18,7 @@ export const listTables = async (restaurantId) => {
   const [tables, restaurant, openSessions] = await Promise.all([
     Table.find({ restaurantId }).lean(),
     Restaurant.findById(restaurantId),
-    TableSession.find({ restaurantId, status: "open" }).select("tableId").lean(),
+    TableSession.find({ restaurantId, status: { $in: LIVE_STATUSES } }).select("tableId").lean(),
   ]);
   const openTableIds = new Set(openSessions.map((session) => String(session.tableId)));
   return tables.map((table) => ({
