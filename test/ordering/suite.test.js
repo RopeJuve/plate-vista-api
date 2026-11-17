@@ -2549,7 +2549,7 @@ test("cross-tenant lists, creates, stats, public menu, and sockets stay inside r
     assert.equal(JSON.stringify(aOnboarding.body).includes(bStripeAccountId), false);
     assert.equal(stripe.accountsCreated(), 1);
     assert.equal(
-      stripe.calls.some(([op, params]) => op === "accountLinks.create" && params.account === bStripeAccountId),
+      stripe.calls.some(([op, params]) => op === "v2.core.accountLinks.create" && params.account === bStripeAccountId),
       false
     );
     assert.equal((await Restaurant.findById(b.restaurant._id).lean()).payoutAccount.stripeAccountId, bStripeAccountId);

@@ -8,6 +8,7 @@ import {
   assertStripeConfigured,
   createOnboardingLink,
   createPayoutAccount,
+  retrievePayoutAccount,
 } from "./stripe.js";
 
 // Where Stripe sends the owner back to, whether they finished or the link
@@ -28,10 +29,38 @@ export const serializePayoutAccount = (restaurant) => {
   };
 };
 
+// Stores the Payout Account's flags as Stripe has them now. It sets absolute
+// values, so running it twice, or after a newer read, changes nothing wrong.
+const syncPayoutAccount = async (stripeAccountId) => {
+  const { chargesEnabled, detailsSubmitted } = await retrievePayoutAccount(stripeAccountId);
+  return Restaurant.findOneAndUpdate(
+    { "payoutAccount.stripeAccountId": stripeAccountId },
+    {
+      $set: {
+        "payoutAccount.chargesEnabled": chargesEnabled,
+        "payoutAccount.detailsSubmitted": detailsSubmitted,
+      },
+    },
+    { new: true, projection: { payoutAccount: 1 } }
+  ).lean();
+};
+
+// Until the Payout Account can take payments, every read asks Stripe, so the
+// owner coming back from onboarding sees where they are even before an event
+// arrives. If Stripe cannot answer, the stored status is shown.
 export const getPayoutAccount = async (restaurantId) => {
   assertStripeConfigured();
   const restaurant = await Restaurant.findById(restaurantId).select("payoutAccount").lean();
   if (!restaurant) throw notFound();
+  const account = restaurant.payoutAccount;
+  if (account?.stripeAccountId && !account.chargesEnabled) {
+    try {
+      const synced = await syncPayoutAccount(account.stripeAccountId);
+      if (synced) return serializePayoutAccount(synced);
+    } catch (error) {
+      logger.warn({ err: error, restaurantId }, "could not read the Payout Account from Stripe; showing the stored status");
+    }
+  }
   return serializePayoutAccount(restaurant);
 };
 
@@ -95,37 +124,32 @@ export const startPayoutOnboarding = async (restaurantId) => {
   return { url };
 };
 
-// Copies the Payout Account's flags from the event. It sets absolute values
-// rather than toggling, so a second delivery of the same event changes nothing.
-const onAccountUpdated = async (event) => {
-  const object = event.data?.object;
-  const stripeAccountId = object?.id;
-  const restaurant = stripeAccountId
-    ? await Restaurant.findOne({ "payoutAccount.stripeAccountId": stripeAccountId }).select("_id").lean()
-    : null;
-  if (!restaurant) {
-    logger.warn({ eventId: event.id, stripeAccountId }, "account.updated for an unknown Payout Account; ignored");
-    return;
-  }
-  await Restaurant.updateOne(
-    { _id: restaurant._id, "payoutAccount.stripeAccountId": stripeAccountId },
-    {
-      $set: {
-        "payoutAccount.chargesEnabled": Boolean(object.charges_enabled),
-        "payoutAccount.detailsSubmitted": Boolean(object.details_submitted),
-      },
-    }
-  );
-};
-
 // One handler per event type; later slices add theirs. Every handler must be
 // safe to run twice for the same event.
-const HANDLERS = {
-  "account.updated": onAccountUpdated,
-};
+const HANDLERS = {};
 
 export const handleStripeEvent = async (event) => {
   const handler = HANDLERS[event?.type];
   if (!handler) return;
   await handler(event);
+};
+
+// Accounts v2 events arrive as thin notifications on their own event
+// destination: they name the account that changed and carry no data, so the
+// account is read from Stripe. Reading the latest state also makes delivery
+// order and repeats harmless.
+export const handleAccountEventNotification = async (notification) => {
+  const related = notification?.related_object;
+  if (!notification?.type?.startsWith("v2.core.account") || related?.type !== "v2.core.account" || !related.id) {
+    return;
+  }
+  const known = await Restaurant.exists({ "payoutAccount.stripeAccountId": related.id });
+  if (!known) {
+    logger.warn(
+      { eventId: notification.id, type: notification.type, stripeAccountId: related.id },
+      "Stripe account event for an unknown Payout Account; ignored"
+    );
+    return;
+  }
+  await syncPayoutAccount(related.id);
 };

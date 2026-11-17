@@ -163,8 +163,8 @@ PATCH /restaurant/payout-account  { onlinePaymentsEnabled: bool } -> 200 PayoutA
 ```ts
 PayoutAccount = { connected: bool, chargesEnabled: bool, detailsSubmitted: bool, onlinePaymentsEnabled: bool }
 // connected:        a Payout Account was created (onboarding started)
-// detailsSubmitted: the owner finished Stripe's form
-// chargesEnabled:   Stripe allows charges; online payments can run
+// detailsSubmitted: the owner has nothing left to fill in; Stripe may still be reviewing
+// chargesEnabled:   Stripe made card payments active; online payments can run
 // onlinePaymentsEnabled: the owner's switch, default true
 ```
 
@@ -172,6 +172,8 @@ Stripe sends the owner back to the dashboard:
 
 - `return_url` = `${DASHBOARD_URL}/admin/kasse?payout=return`: the owner left or finished the form. Read `GET` again; Stripe may still be reviewing.
 - `refresh_url` = `${DASHBOARD_URL}/admin/kasse?payout=refresh`: the link expired. `POST` again for a fresh link and redirect; the same account is reused.
+
+Until `chargesEnabled`, every `GET` reads the account from Stripe, so the status is current when the owner comes back. After that, Stripe's Accounts v2 events keep it current: create an event destination with **thin** payloads for the `v2.core.account[requirements].updated` and `v2.core.account[configuration.merchant].capability_status_updated` events, pointing at `POST /api/v1/webhooks/stripe/accounts`, and put its signing secret in `STRIPE_ACCOUNT_WEBHOOK_SECRET`.
 
 ### The bill
 

@@ -93,18 +93,21 @@ test("Stripe settings are optional and the platform fee defaults to 0 basis poin
   const env = loadEnv(base);
   assert.equal(env.STRIPE_SECRET_KEY, undefined);
   assert.equal(env.STRIPE_WEBHOOK_SECRET, undefined);
+  assert.equal(env.STRIPE_ACCOUNT_WEBHOOK_SECRET, undefined);
   assert.equal(env.STRIPE_APPLICATION_FEE_BPS, 0);
 
   const configured = loadEnv({
     ...base,
     STRIPE_SECRET_KEY: "sk_test_123",
     STRIPE_WEBHOOK_SECRET: "whsec_123",
+    STRIPE_ACCOUNT_WEBHOOK_SECRET: "whsec_456",
     STRIPE_APPLICATION_FEE_BPS: "150",
     GUEST_APP_URL: "https://guest.example.com",
     DASHBOARD_URL: "https://dashboard.example.com",
   });
   assert.equal(configured.STRIPE_SECRET_KEY, "sk_test_123");
   assert.equal(configured.STRIPE_WEBHOOK_SECRET, "whsec_123");
+  assert.equal(configured.STRIPE_ACCOUNT_WEBHOOK_SECRET, "whsec_456");
   assert.equal(configured.STRIPE_APPLICATION_FEE_BPS, 150);
   assert.equal(configured.GUEST_APP_URL, "https://guest.example.com");
   assert.equal(configured.DASHBOARD_URL, "https://dashboard.example.com");

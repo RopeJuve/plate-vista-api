@@ -35,44 +35,102 @@ export const assertStripeConfigured = () => {
   if (!process.env.DASHBOARD_URL) throw notConfigured();
 };
 
-const toPayoutAccount = (account) => ({
-  stripeAccountId: account.id,
-  chargesEnabled: Boolean(account.charges_enabled),
-  detailsSubmitted: Boolean(account.details_submitted),
-});
+// Requirements the owner still has to fill in before Stripe can decide.
+const OWNER_DUE = new Set(["currently_due", "past_due"]);
 
-// An Express Payout Account in Germany that can take card payments and
-// receive transfers. The idempotency key stops two concurrent requests from
-// creating two accounts for one restaurant.
+// The Payout Account as Plate Vista keeps it. `chargesEnabled` is the card
+// payments capability being active. `detailsSubmitted` means the owner has
+// nothing left to fill in: Stripe may still be reviewing. Without the
+// requirements in the response we cannot tell, so it reads as not submitted.
+const toPayoutAccount = (account) => {
+  const chargesEnabled = account.configuration?.merchant?.capabilities?.card_payments?.status === "active";
+  const entries = account.requirements ? account.requirements.entries ?? [] : null;
+  const ownerHasWork =
+    entries === null ||
+    entries.some(
+      (entry) => entry.awaiting_action_from === "user" && OWNER_DUE.has(entry.minimum_deadline?.status)
+    );
+  return {
+    stripeAccountId: account.id,
+    chargesEnabled,
+    detailsSubmitted: chargesEnabled || !ownerHasWork,
+  };
+};
+
+// What every Payout Account read asks Stripe to include; both are null otherwise.
+const INCLUDE = ["configuration.merchant", "requirements"];
+
+// A Payout Account in Germany created with Accounts v2 (ADR-0006). The
+// restaurant takes direct charges as the merchant, so it gets the merchant
+// configuration with card payments, its own full Stripe Dashboard, and pays
+// Stripe's fees itself; Stripe, not Plate Vista, carries negative balances.
+// The owner fills in the rest on Stripe's onboarding. The idempotency key
+// stops two concurrent requests from creating two accounts for one
+// restaurant; its "v2-" part keeps it apart from keys Stripe still remembers
+// for the old v1 request, which it would refuse with different parameters.
 export const createPayoutAccount = async ({ restaurantId }) => {
-  const account = await client().accounts.create(
+  const account = await client().v2.core.accounts.create(
     {
-      type: "express",
-      country: "DE",
-      capabilities: {
-        card_payments: { requested: true },
-        transfers: { requested: true },
+      dashboard: "full",
+      identity: { country: "de" },
+      configuration: {
+        merchant: {
+          capabilities: { card_payments: { requested: true } },
+        },
+      },
+      defaults: {
+        currency: "eur",
+        responsibilities: { fees_collector: "stripe", losses_collector: "stripe" },
       },
       metadata: { restaurantId: String(restaurantId) },
+      include: INCLUDE,
     },
-    { idempotencyKey: `payout-account-${restaurantId}` }
+    { idempotencyKey: `payout-account-v2-${restaurantId}` }
   );
   return toPayoutAccount(account);
 };
 
 export const retrievePayoutAccount = async (stripeAccountId) =>
-  toPayoutAccount(await client().accounts.retrieve(stripeAccountId));
+  toPayoutAccount(await client().v2.core.accounts.retrieve(stripeAccountId, { include: INCLUDE }));
 
 // A Stripe-hosted, single-use link where the owner fills in the Payout
 // Account's details. Expired or used links send the owner to refreshUrl.
+// Everything Stripe will ever need is asked for at once, so the owner is not
+// sent back later for more.
 export const createOnboardingLink = async ({ stripeAccountId, refreshUrl, returnUrl }) => {
-  const link = await client().accountLinks.create({
+  const link = await client().v2.core.accountLinks.create({
     account: stripeAccountId,
-    type: "account_onboarding",
-    refresh_url: refreshUrl,
-    return_url: returnUrl,
+    use_case: {
+      type: "account_onboarding",
+      account_onboarding: {
+        collection_options: { fields: "eventually_due" },
+        refresh_url: refreshUrl,
+        return_url: returnUrl,
+      },
+    },
   });
   return link.url;
+};
+
+// Verifies a thin event notification (Accounts v2 events arrive this way)
+// against STRIPE_ACCOUNT_WEBHOOK_SECRET, the signing secret of its own event
+// destination, and returns it. It names the changed object but carries none
+// of its data. rawBody must be the bytes Stripe sent, unparsed.
+export const parseAccountEventNotification = (rawBody, signature) => {
+  const stripe = client();
+  const secret = process.env.STRIPE_ACCOUNT_WEBHOOK_SECRET;
+  if (!secret) throw notConfigured();
+  if (!signature || !Buffer.isBuffer(rawBody)) {
+    throw new AppError("STRIPE_SIGNATURE_INVALID", "Invalid webhook signature");
+  }
+  try {
+    return stripe.parseEventNotification(rawBody, signature, secret);
+  } catch (error) {
+    if (error?.type === "StripeSignatureVerificationError") {
+      throw new AppError("STRIPE_SIGNATURE_INVALID", "Invalid webhook signature");
+    }
+    throw error;
+  }
 };
 
 // Verifies a webhook's Stripe-Signature against STRIPE_WEBHOOK_SECRET and
