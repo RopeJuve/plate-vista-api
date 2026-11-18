@@ -196,16 +196,20 @@ POST /sessions/:id/online-payment
   -> 404                                     a guest token for another session
 
 POST /sessions/:id/online-payment/cancel    guest of this session, owner, admin (bar/kitchen → 403)
-  -> 200                                     unfrozen, or was not frozen
+  -> 200 { status }                          unfrozen (`open`), or was not frozen (the session's status)
   -> 409 BILL_PAYING_ONLINE                  the guest has just paid; wait for bill.paid
+  -> 502 PAYMENT_PROVIDER_ERROR              guest only: Stripe failed; the bill stays frozen until it expires
+  -> 404                                     a guest token for another session
 ```
+
+Every unfreeze expires the Stripe Checkout Session first, then the session is `open` and `bill.unfrozen` goes out.
 
 Stripe sends the guest back to their own table page, so the app finds the guest token there:
 
 - `success_url` = `${GUEST_APP_URL}/r/:slug/t/:qrCode?payment=return`: wait for `bill.paid`, polling `GET /sessions/:id/receipt-token` as a backup (202 `PAYING` = not confirmed yet, 404 = not paid and no longer frozen).
 - `cancel_url` = `${GUEST_APP_URL}/r/:slug/t/:qrCode?payment=cancelled`: call `POST /sessions/:id/online-payment/cancel`.
 
-**Staff win:** recording cash or card (`POST /sessions/:id/payments`) or closing the table on a frozen bill unfreezes it first. Both can answer 409 `BILL_PAYING_ONLINE` when the guest has just paid online.
+**Staff win:** recording cash or card (`POST /sessions/:id/payments`) or closing the table on a frozen bill unfreezes it first. Both can answer 409 `BILL_PAYING_ONLINE` when the guest has just paid online. When Stripe cannot be reached, staff still win: the bill unfreezes and the payment or close goes ahead; a guest payment that completes anyway is a Late Payment and is refunded. A close that would fail with `BILL_UNPAID` fails before touching the guest's payment.
 
 When the webhook records the online Payment, `bill.paid` arrives with `method: 'ONLINE'`, and the Payment, receipt and TSE signing are the same as for cash.
 
@@ -236,7 +240,7 @@ OnlinePaymentRefund = {
 | `STRIPE_NOT_CONFIGURED` | 503 | the server has no Stripe keys |
 | `ONLINE_PAYMENT_UNAVAILABLE` | 409 | start while `canPayOnline` is false |
 | `PAYOUT_ACCOUNT_MISSING` | 409 | switching online payments before onboarding started (`connected: false`) |
-| `PAYMENT_PROVIDER_ERROR` | 502 | Stripe failed when starting |
+| `PAYMENT_PROVIDER_ERROR` | 502 | Stripe failed when starting, or when a guest cancels |
 | `BILL_FROZEN` | 409 | order or ticket cancel while the bill is frozen |
 | `BILL_PAYING_ONLINE` | 409 | unfreeze, staff payment or close when the guest has just paid online |
 

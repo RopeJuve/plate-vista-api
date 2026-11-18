@@ -8,6 +8,7 @@
 //   fake.calls;                                           // [["v2.core.accounts.create", params, options], ...]
 //   fake.failNext("checkout.sessions.create");            // the next such call throws a Stripe error
 //   fake.refundsCreated();                                // refunds Stripe actually made (idempotent replays not counted)
+//   fake.completeCheckoutSession(id);                     // the guest paid: expiring it now fails as Stripe does
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 class StripeSignatureVerificationError extends Error {
@@ -68,6 +69,8 @@ export const createFakeStripe = () => {
   // Stripe replays the first response for a repeated idempotency key.
   const idempotent = new Map();
   const refunds = [];
+  // Checkout Sessions by id, as Stripe keeps them.
+  const checkouts = new Map();
 
   const maybeFail = (op) => {
     if (!failing.delete(op)) return;
@@ -88,11 +91,26 @@ export const createFakeStripe = () => {
     return { ...found };
   };
 
+  // A Checkout Session made on a connected account is found only there.
+  const checkoutSession = (id, stripeAccount) => {
+    const found = checkouts.get(id);
+    if (!found || found.stripeAccount !== stripeAccount) {
+      const error = new Error(`No such checkout.session: '${id}'`);
+      error.type = "StripeInvalidRequestError";
+      error.statusCode = 404;
+      throw error;
+    }
+    return found;
+  };
+
   return {
     calls,
     accountsCreated: () => calls.filter(([op]) => op === "v2.core.accounts.create").length,
     checkoutSessionsCreated: () => calls.filter(([op]) => op === "checkout.sessions.create").length,
     refundsCreated: () => refunds.length,
+    completeCheckoutSession(id) {
+      Object.assign(checkouts.get(id), { status: "complete", payment_status: "paid" });
+    },
     failNext(op) {
       failing.add(op);
     },
@@ -160,8 +178,32 @@ export const createFakeStripe = () => {
             status: "open",
             url: `https://checkout.stripe.test/c/pay/${id}`,
           };
+          checkouts.set(id, { ...session, stripeAccount: options.stripeAccount });
           if (key) idempotent.set(key, session);
           return { ...session };
+        },
+        async retrieve(id, params, options = {}) {
+          calls.push(["checkout.sessions.retrieve", id, params, options]);
+          maybeFail("checkout.sessions.retrieve");
+          const { stripeAccount, ...session } = checkoutSession(id, options.stripeAccount);
+          return session;
+        },
+        // Stripe expires only an open Checkout Session.
+        async expire(id, params, options = {}) {
+          calls.push(["checkout.sessions.expire", id, params, options]);
+          maybeFail("checkout.sessions.expire");
+          const session = checkoutSession(id, options.stripeAccount);
+          if (session.status !== "open") {
+            const error = new Error(
+              `Only Checkout Sessions with a status in ["open"] can be expired. This Checkout Session has a status of "${session.status}".`
+            );
+            error.type = "StripeInvalidRequestError";
+            error.statusCode = 400;
+            throw error;
+          }
+          Object.assign(session, { status: "expired", url: null });
+          const { stripeAccount, ...expired } = session;
+          return expired;
         },
       },
     },

@@ -158,6 +158,24 @@ export const createOnlinePaymentCheckout = async ({
   return { checkoutSessionId: checkout.id, url: checkout.url };
 };
 
+// Expires a Checkout Session on the restaurant's Payout Account so the guest
+// can no longer pay it. Returns "expired", or "complete" when the guest has
+// paid it already (Stripe expires only an open one). Any other failure throws.
+export const expireOnlinePaymentCheckout = async ({ stripeAccountId, checkoutSessionId }) => {
+  const stripe = client();
+  try {
+    await stripe.checkout.sessions.expire(checkoutSessionId, {}, { stripeAccount: stripeAccountId });
+    return "expired";
+  } catch (error) {
+    if (error?.type !== "StripeInvalidRequestError") throw error;
+    // Not open any more: ask Stripe what it is now.
+    const checkout = await stripe.checkout.sessions.retrieve(checkoutSessionId, {}, { stripeAccount: stripeAccountId });
+    if (checkout.status === "complete") return "complete";
+    if (checkout.status === "expired") return "expired";
+    throw error;
+  }
+};
+
 // Verifies a thin event notification (Accounts v2 events arrive this way)
 // against STRIPE_ACCOUNT_WEBHOOK_SECRET, the signing secret of its own event
 // destination, and returns it. It names the changed object but carries none

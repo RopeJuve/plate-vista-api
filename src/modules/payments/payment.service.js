@@ -6,6 +6,7 @@ import { serializePayment } from "./serialize.js";
 import { recordPaymentSchema } from "./payment.schemas.js";
 import { requestSigning } from "./signing.js";
 import { publishBillPaid } from "./events.js";
+import { unfreezeBill } from "./unfreeze.js";
 import { isTseActive } from "../tse/tse.service.js";
 import { getSessionBill } from "../ordering/order.service.js";
 import { findSession, touchSession } from "../ordering/session.service.js";
@@ -100,11 +101,13 @@ const payBill = async (ctx, sessionId, { method, clientPaymentId, settle }) => {
 };
 
 // Records that staff took the bill's money in cash or at the card terminal.
-// Returns { payment, replayed }; a replay is the payment an earlier request
+// Staff win over an online payment: a frozen bill is unfrozen first, even
+// when Stripe cannot be reached. Returns { payment, replayed }; a replay is the payment an earlier request
 // with the same clientPaymentId recorded.
 export const recordPayment = async (ctx, sessionId, input) => {
   await findSession(ctx.restaurantId, sessionId);
   const payload = parseOrThrow(recordPaymentSchema, input);
+  await unfreezeBill(ctx, sessionId, { evenIfStripeFails: true });
   const { payment, replayed } = await payBill(ctx, sessionId, {
     method: payload.method,
     clientPaymentId: payload.clientPaymentId,

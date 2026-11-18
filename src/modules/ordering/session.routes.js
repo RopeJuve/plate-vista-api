@@ -11,6 +11,7 @@ import { closeSessionSchema } from "../payments/payment.schemas.js";
 import { parseOrThrow } from "../../shared/validate.js";
 import { canPayBillOnline } from "../payouts/payout.service.js";
 import { startOnlinePayment } from "../payments/onlinePayment.service.js";
+import { unfreezeBill } from "../payments/unfreeze.js";
 
 const sessionRouter = express.Router();
 
@@ -112,6 +113,29 @@ sessionRouter.post(
     const result = await startOnlinePayment(
       { restaurantId: req.tenant.restaurantId, requestId: req.id },
       req.params.id
+    );
+    res.status(200).json(result);
+  })
+);
+
+// The guest went back from Stripe, or an owner or admin unfreezes the bill by
+// hand. Not frozen: nothing to do. Staff win even when Stripe is down; a
+// guest then gets 502 and the bill stays frozen until Stripe expires it.
+sessionRouter.post(
+  "/:id/online-payment/cancel",
+  requireAuth,
+  requireRole("admin", "guest"),
+  requireTenant,
+  checkId,
+  asyncRoute(async (req, res) => {
+    const isGuest = req.user.role === "guest";
+    if (isGuest && req.user.sessionId !== req.params.id) {
+      throw new AppError("NOT_FOUND", "Not found", 404);
+    }
+    const result = await unfreezeBill(
+      { restaurantId: req.tenant.restaurantId, requestId: req.id },
+      req.params.id,
+      { evenIfStripeFails: !isGuest }
     );
     res.status(200).json(result);
   })
