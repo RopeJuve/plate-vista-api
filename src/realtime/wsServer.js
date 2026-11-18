@@ -5,7 +5,7 @@ import { AppError } from "../shared/errors.js";
 import { logger } from "../shared/logger.js";
 import { join, leaveAll, staffRoom, sessionRoom } from "./rooms.js";
 import { handleMessage } from "./handlers.js";
-import { assertOpenSession } from "../modules/ordering/session.service.js";
+import { assertLiveSession } from "../modules/ordering/session.service.js";
 
 export const HEARTBEAT_INTERVAL_MS = 30_000;
 export const MAX_PAYLOAD_BYTES = 16 * 1024;
@@ -136,7 +136,7 @@ export const attachWebSocket = (server) => {
     });
     try {
       if (auth.role === "guest") {
-        await assertOpenSession(auth.restaurantId, auth.sessionId);
+        await assertLiveSession(auth.restaurantId, auth.sessionId);
       }
     } catch (error) {
       pending = null;

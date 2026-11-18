@@ -10,6 +10,7 @@ import { receiptTokenLimiter } from "../../shared/rateLimiters.js";
 import { closeSessionSchema } from "../payments/payment.schemas.js";
 import { parseOrThrow } from "../../shared/validate.js";
 import { canPayBillOnline } from "../payouts/payout.service.js";
+import { startOnlinePayment } from "../payments/onlinePayment.service.js";
 
 const sessionRouter = express.Router();
 
@@ -93,6 +94,26 @@ sessionRouter.post(
       req.body
     );
     res.status(replayed ? 200 : 201).json(payment);
+  })
+);
+
+// A guest of this session, or staff, starts paying the whole bill online.
+// The response sends the browser to Stripe.
+sessionRouter.post(
+  "/:id/online-payment",
+  requireAuth,
+  requireRole("employee", "guest"),
+  requireTenant,
+  checkId,
+  asyncRoute(async (req, res) => {
+    if (req.user.role === "guest" && req.user.sessionId !== req.params.id) {
+      throw new AppError("NOT_FOUND", "Not found", 404);
+    }
+    const result = await startOnlinePayment(
+      { restaurantId: req.tenant.restaurantId, requestId: req.id },
+      req.params.id
+    );
+    res.status(200).json(result);
   })
 );
 

@@ -215,9 +215,11 @@ Exactly one ack per message, carrying the same `requestId`:
 { "type": "ack", "requestId": "uuid", "ok": false, "error": { "code": "OUT_OF_STOCK", "message": "..." } }
 ```
 
-Error codes: `VALIDATION`, `NOT_FOUND`, `OUT_OF_STOCK`, `FORBIDDEN`, `INVALID_TRANSITION`, `SESSION_CLOSED`, `BILL_PAID`, `RATE_LIMITED`, `INTERNAL`.
+Error codes: `VALIDATION`, `NOT_FOUND`, `OUT_OF_STOCK`, `FORBIDDEN`, `INVALID_TRANSITION`, `SESSION_CLOSED`, `BILL_PAID`, `BILL_FROZEN`, `RATE_LIMITED`, `INTERNAL`.
 
 `BILL_PAID` (2.3): the session's bill is paid, so it takes no more orders or cancellations. `order.create`, `order.update`, and `order.cancel` of a ticket on that bill fail with it.
+
+`BILL_FROZEN` (2.5): a guest is paying the bill online, so it takes no orders or cancellations until the payment completes or is abandoned. `order.create`, `order.update`, and `order.cancel` fail with it; `order.status` moving a ticket forward still works. A guest's socket stays connected while the bill is frozen.
 
 `details` is optional:
 
