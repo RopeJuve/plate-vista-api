@@ -10,6 +10,7 @@ import { assertOnlinePaymentsConfigured, createOnlinePaymentCheckout } from "../
 import { mergeReceiptLines } from "./money.js";
 import { recordOnlinePayment } from "./payment.service.js";
 import { publishBillFrozen, publishBillUnfrozen } from "./events.js";
+import { isRefunded, refundLatePayment } from "./latePayment.service.js";
 import { AppError } from "../../shared/errors.js";
 import { captureException, logger } from "../../shared/logger.js";
 
@@ -144,9 +145,22 @@ const billOf = (checkout) => {
 
 const STRIPE_ACTOR = { type: "system", id: "stripe" };
 
+// A Late Payment is refunded in full and recorded. A failed refund is
+// rethrown so the webhook answers 500 and Stripe delivers the event again.
+const refundLate = async (event, bill, checkout, reason, log) => {
+  logger.warn({ ...log, reason }, "late online payment; refunding");
+  try {
+    await refundLatePayment({ ...bill, checkout, stripeAccountId: event.account, reason });
+  } catch (error) {
+    logger.error({ ...log, reason, err: error }, "refunding a late online payment failed");
+    captureException(error);
+    throw error;
+  }
+};
+
 // Stripe's `checkout.session.completed`: the guest has paid, so the webhook,
 // and only the webhook, records the online Payment. A payment that cannot
-// pay the bill is a Late Payment; it is logged until refunds exist (#65).
+// pay the bill is a Late Payment and is refunded.
 export const completeOnlinePayment = async (event) => {
   const checkout = event.data?.object;
   if (checkout?.payment_status !== "paid") return;
@@ -156,12 +170,14 @@ export const completeOnlinePayment = async (event) => {
     logger.warn(log, "paid Checkout Session names no bill; ignored");
     return;
   }
+  // Refunded already: a redelivered event changes nothing.
+  if (await isRefunded(bill.restaurantId, checkout.id)) return;
   const ctx = { restaurantId: bill.restaurantId, requestId: event.id, actor: STRIPE_ACTOR };
   try {
     await recordOnlinePayment(ctx, bill.sessionId, checkout.id);
   } catch (error) {
     if (error?.code === "LATE_PAYMENT") {
-      logger.warn({ ...log, reason: error.details.reason }, "late online payment; not recorded");
+      await refundLate(event, bill, checkout, error.details.reason, log);
       return;
     }
     if (error?.code === "NOT_FOUND" || error?.code === "VALIDATION") {

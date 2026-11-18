@@ -106,6 +106,7 @@ const checkoutEvent = (place, type, checkoutSessionId, overrides = {}) => ({
       mode: "payment",
       status: type === "checkout.session.expired" ? "expired" : "complete",
       payment_status: type === "checkout.session.expired" ? "unpaid" : "paid",
+      payment_intent: type === "checkout.session.expired" ? null : `pi_${checkoutSessionId}`,
       amount_total: 1450,
       currency: "eur",
       metadata: { restaurantId: String(place.restaurant._id), sessionId: place.sessionId, amountCents: "1450" },

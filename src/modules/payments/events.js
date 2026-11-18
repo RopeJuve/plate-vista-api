@@ -69,3 +69,11 @@ export const publishBillUnfrozen = ({ restaurantId, sessionId }) =>
     sessionId,
     message: event("bill.unfrozen", { sessionId: String(sessionId) }),
   });
+
+// A Late Payment was refunded (PROTOCOL 2.5); staff only.
+export const publishOnlinePaymentRefunded = (restaurantId, refund) =>
+  send({
+    restaurantId,
+    audience: "staff",
+    message: event("online_payment.refunded", { refund }),
+  });

@@ -7,6 +7,7 @@
 //   fake.signedEvent(event, secret);                      // { body, signature }
 //   fake.calls;                                           // [["v2.core.accounts.create", params, options], ...]
 //   fake.failNext("checkout.sessions.create");            // the next such call throws a Stripe error
+//   fake.refundsCreated();                                // refunds Stripe actually made (idempotent replays not counted)
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 class StripeSignatureVerificationError extends Error {
@@ -66,6 +67,7 @@ export const createFakeStripe = () => {
   const failing = new Set();
   // Stripe replays the first response for a repeated idempotency key.
   const idempotent = new Map();
+  const refunds = [];
 
   const maybeFail = (op) => {
     if (!failing.delete(op)) return;
@@ -90,6 +92,7 @@ export const createFakeStripe = () => {
     calls,
     accountsCreated: () => calls.filter(([op]) => op === "v2.core.accounts.create").length,
     checkoutSessionsCreated: () => calls.filter(([op]) => op === "checkout.sessions.create").length,
+    refundsCreated: () => refunds.length,
     failNext(op) {
       failing.add(op);
     },
@@ -160,6 +163,23 @@ export const createFakeStripe = () => {
           if (key) idempotent.set(key, session);
           return { ...session };
         },
+      },
+    },
+    refunds: {
+      async create(params, options = {}) {
+        calls.push(["refunds.create", params, options]);
+        maybeFail("refunds.create");
+        const key = options.idempotencyKey && `${options.stripeAccount}|${options.idempotencyKey}`;
+        if (key && idempotent.has(key)) return { ...idempotent.get(key) };
+        const refund = {
+          id: `re_${randomBytes(12).toString("hex")}`,
+          object: "refund",
+          payment_intent: params.payment_intent,
+          status: "succeeded",
+        };
+        refunds.push(refund);
+        if (key) idempotent.set(key, refund);
+        return { ...refund };
       },
     },
     // Thin event notifications, as the SDK parses them.
