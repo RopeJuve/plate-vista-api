@@ -162,11 +162,24 @@ test("the owner gets an onboarding link for a new Accounts v2 Payout Account in 
       type: "account_onboarding",
       account_onboarding: {
         collection_options: { fields: "eventually_due" },
-        refresh_url: "https://dashboard.example.com/settings/payout-account",
-        return_url: "https://dashboard.example.com/settings/payout-account",
+        refresh_url: "https://dashboard.example.com/admin/kasse?payout=refresh",
+        return_url: "https://dashboard.example.com/admin/kasse?payout=return",
       },
     },
   });
+});
+
+test("onboarding returns the owner to the Kasse page even when DASHBOARD_URL ends in a slash", async () => {
+  process.env.DASHBOARD_URL = "https://dashboard.example.com/";
+  const { asOwner } = await place();
+
+  const res = await asOwner("post");
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+
+  const [link] = fake.calls.filter(([op]) => op === "v2.core.accountLinks.create");
+  const { refresh_url, return_url } = link[1].use_case.account_onboarding;
+  assert.equal(refresh_url, "https://dashboard.example.com/admin/kasse?payout=refresh");
+  assert.equal(return_url, "https://dashboard.example.com/admin/kasse?payout=return");
 });
 
 test("a second POST reuses the Payout Account and returns a fresh link", async () => {
