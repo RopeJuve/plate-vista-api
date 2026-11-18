@@ -7,7 +7,7 @@ import { executeOrderCommand } from "../modules/ordering/order.service.js";
 import { assertOpenSession } from "../modules/ordering/session.service.js";
 
 const WINDOW_MS = 10_000;
-const MAX_MESSAGES = 10;
+export const MAX_MESSAGES = 10;
 const MAX_VIOLATIONS = 3;
 
 const allowMessage = (socket) => {
