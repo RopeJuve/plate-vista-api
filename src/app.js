@@ -25,6 +25,7 @@ import internalRouter from "./modules/internal/internal.routes.js";
 import restaurantRouter, { publicRestaurantRouter } from "./modules/restaurants/restaurant.routes.js";
 import tseRouter from "./modules/tse/tse.routes.js";
 import receiptRouter from "./modules/payments/receipt.routes.js";
+import refundRouter from "./modules/payments/refund.routes.js";
 import { payoutAccountRouter, stripeWebhookRouter } from "./modules/payouts/payout.routes.js";
 
 void initSentry();
@@ -126,6 +127,7 @@ app.use("/api/v1/statistics", statisticsRouter);
 app.use("/api/v1/staff", staffRouter);
 app.use("/api/v1/restaurant", restaurantRouter);
 app.use("/api/v1/restaurant", payoutAccountRouter);
+app.use("/api/v1/restaurant", refundRouter);
 app.use("/api/v1/tse", tseRouter);
 app.use("/api/v1/receipts", receiptRouter);
 app.use("/internal", internalRouter);

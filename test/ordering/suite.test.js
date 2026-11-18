@@ -34,6 +34,7 @@ import Employee from "../../src/modules/staff/employee.model.js";
 import User from "../../src/modules/staff/user.model.js";
 import Restaurant from "../../src/modules/restaurants/restaurant.model.js";
 import Category from "../../src/modules/categories/category.model.js";
+import OnlinePaymentRefund from "../../src/modules/payments/onlinePaymentRefund.model.js";
 import { registerRestaurant } from "../../src/modules/staff/staff.service.js";
 import { hasCompleteLegalDetails } from "../../src/modules/restaurants/legal.js";
 import { setStripeClient } from "../../src/modules/payouts/stripe.js";
@@ -2240,6 +2241,7 @@ const AUTHENTICATED_ROUTES = [
   "GET /api/v1/restaurant/payout-account",
   "POST /api/v1/restaurant/payout-account",
   "PATCH /api/v1/restaurant/payout-account",
+  "GET /api/v1/restaurant/online-payment-refunds",
   "GET /api/v1/tse",
   "POST /api/v1/tse/setup",
   "GET /api/v1/tse/failed",
@@ -2521,6 +2523,22 @@ test("cross-tenant lists, creates, stats, public menu, and sockets stay inside r
   assert.equal(aRetry.status, 404);
   const bFailedNow = await Order.findOne({ _id: orderB.order._id, restaurantId: b.restaurant._id }).lean();
   assert.equal(bFailedNow.tse.retryCount, 20);
+  // B's refunded Late Payments are not listed for A.
+  await OnlinePaymentRefund.create({
+    restaurantId: b.restaurant._id,
+    sessionId: orderB.order.sessionId,
+    tableId: b.table._id,
+    tableNumber: 1,
+    checkoutSessionId: `cs_b_${tag}`,
+    paymentIntentId: `pi_b_${tag}`,
+    amountCents: 100,
+    reason: "BILL_NOT_FROZEN",
+    refundedAt: new Date(),
+  });
+  const aRefunds = await asA("get", "/api/v1/restaurant/online-payment-refunds");
+  cover("GET", "/api/v1/restaurant/online-payment-refunds");
+  assert.equal(aRefunds.status, 200);
+  assert.deepEqual(aRefunds.body, { items: [], nextBefore: null });
   // Payout Account: A's owner reads and sets up only A's, never B's.
   const bStripeAccountId = `acct_b_${tag}`;
   await Restaurant.updateOne(

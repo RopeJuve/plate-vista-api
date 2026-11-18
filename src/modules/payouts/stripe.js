@@ -197,3 +197,14 @@ export const constructWebhookEvent = (rawBody, signature) => {
     throw error;
   }
 };
+
+// Refunds a Late Payment in full on the restaurant's Payout Account, with the
+// platform fee given back too. The Checkout Session id is the idempotency
+// key, so a retried webhook never refunds twice.
+export const refundOnlinePayment = async ({ stripeAccountId, paymentIntentId, checkoutSessionId }) => {
+  const refund = await client().refunds.create(
+    { payment_intent: paymentIntentId, refund_application_fee: true },
+    { stripeAccount: stripeAccountId, idempotencyKey: checkoutSessionId }
+  );
+  return { refundId: refund.id };
+};
