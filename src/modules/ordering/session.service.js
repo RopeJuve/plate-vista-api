@@ -8,6 +8,7 @@ import { AppError, duplicateKeyOn } from "../../shared/errors.js";
 import { publish } from "../../realtime/events.js";
 import { serializeOrder, serializeSession } from "./serialize.js";
 import { serializePayment } from "../payments/serialize.js";
+import { unfreezeBill } from "../payments/unfreeze.js";
 
 // Short code guests read to each other at the table. No 0/O or 1/I.
 const newJoinCode = customAlphabet("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", 4);
@@ -120,12 +121,27 @@ const unpaidTotalCents = async (restaurantId, sessionId, mongoSession) => {
   return orders.reduce((sum, order) => sum + order.totalCents, 0);
 };
 
+// Staff win over an online payment: a frozen bill is unfrozen before its
+// table closes, even when Stripe cannot be reached. A close that would fail
+// as unpaid fails first, so the guest's payment runs on.
+const unfreezeToClose = async (ctx, sessionId, unpaidReason) => {
+  const session = await TableSession.findOne({ _id: sessionId, restaurantId: ctx.restaurantId })
+    .select("status")
+    .lean();
+  if (session?.status !== "paying") return;
+  if (unpaidReason === undefined && (await unpaidTotalCents(ctx.restaurantId, sessionId, null)) > 0) {
+    throw new AppError("BILL_UNPAID", "The bill is not paid yet");
+  }
+  await unfreezeBill(ctx, sessionId, { evenIfStripeFails: true });
+};
+
 // A bill above 0 closes once it is paid; an owner or admin can close it unpaid
 // by giving a reason, which is kept on the session.
 export const closeSession = async (ctx, sessionId, { unpaidReason } = {}) => {
   if (unpaidReason !== undefined && !canCloseUnpaid(ctx.actor)) {
     throw new AppError("FORBIDDEN", "Only an owner or admin can close an unpaid bill", 403);
   }
+  await unfreezeToClose(ctx, sessionId, unpaidReason);
   const mongoSession = await mongoose.startSession();
   try {
     let closed;
