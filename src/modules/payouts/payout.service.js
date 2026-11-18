@@ -11,9 +11,10 @@ import {
   retrievePayoutAccount,
 } from "./stripe.js";
 
-// Where Stripe sends the owner back to, whether they finished or the link
-// expired. The dashboard page reads the status and offers a new link.
-const settingsUrl = () => `${process.env.DASHBOARD_URL.replace(/\/+$/, "")}/settings/payout-account`;
+// Where Stripe sends the owner back to, whether they finished (`return`) or the
+// link expired (`refresh`). The Payout Account section lives on the Kasse page,
+// which reads the status and offers a new link.
+const kasseUrl = (payout) => `${process.env.DASHBOARD_URL.replace(/\/+$/, "")}/admin/kasse?payout=${payout}`;
 
 const notFound = () => new AppError("NOT_FOUND", "Restaurant not found");
 
@@ -118,8 +119,8 @@ export const startPayoutOnboarding = async (restaurantId) => {
   const stripeAccountId = await ensurePayoutAccount(restaurantId);
   const url = await createOnboardingLink({
     stripeAccountId,
-    refreshUrl: settingsUrl(),
-    returnUrl: settingsUrl(),
+    refreshUrl: kasseUrl("refresh"),
+    returnUrl: kasseUrl("return"),
   });
   return { url };
 };
