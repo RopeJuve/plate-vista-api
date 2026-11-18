@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import Payment from "./payment.model.js";
+import TableSession from "../ordering/session.model.js";
 import Restaurant from "../restaurants/restaurant.model.js";
 import { serializePayment } from "./serialize.js";
 import { recordPaymentSchema } from "./payment.schemas.js";
@@ -34,15 +35,15 @@ const assertTseActive = async (restaurantId, mongoSession) => {
   }
 };
 
-// Records that staff took the bill's money in cash or at the card terminal.
-// Returns { payment, replayed }; a replay is the payment an earlier request
-// with the same clientPaymentId recorded.
-export const recordPayment = async (ctx, sessionId, input) => {
-  await findSession(ctx.restaurantId, sessionId);
-  const payload = parseOrThrow(recordPaymentSchema, input);
-  const { clientPaymentId } = payload;
+// The one path every Payment takes, whoever records it: in a transaction it
+// checks the bill, lets `settle` check what this kind of payment needs and
+// name the amount, and writes the Payment; then it publishes `bill.paid` and
+// asks the TSE to sign it (ADR-0003, ADR-0005). Returns { payment, replayed };
+// a replay is the payment an earlier call with the same clientPaymentId
+// recorded.
+const payBill = async (ctx, sessionId, { method, clientPaymentId, settle }) => {
   const earlier = await findReplay(ctx.restaurantId, sessionId, clientPaymentId);
-  if (earlier) return { payment: serializePayment(earlier), replayed: true };
+  if (earlier) return { payment: earlier, replayed: true };
 
   let result;
   const mongoSession = await mongoose.startSession();
@@ -55,23 +56,16 @@ export const recordPayment = async (ctx, sessionId, input) => {
       // makes this one conflict on the session document and re-read the bill.
       const bill = await getSessionBill(ctx, sessionId, mongoSession);
       if (bill.payment) throw new AppError("BILL_PAID", "This bill is paid");
-      if (bill.totalCents === 0) {
-        throw new AppError("BILL_EMPTY", "The bill is empty; close the table instead");
-      }
-      if (bill.totalCents !== payload.expectedTotalCents) {
-        throw new AppError("BILL_CHANGED", "The bill changed; check the new total", undefined, {
-          totalCents: bill.totalCents,
-        });
-      }
-      await touchSession(ctx.restaurantId, sessionId, mongoSession);
+      // settle writes the session document, so changes to the bill conflict.
+      const amountCents = await settle(bill, mongoSession);
       const [payment] = await Payment.create(
         [
           {
             restaurantId: ctx.restaurantId,
             sessionId,
             tableId: bill.session.tableId,
-            method: payload.method,
-            amountCents: bill.totalCents,
+            method,
+            amountCents,
             paidAt: new Date(),
             paidBy: ctx.actor?.type === "employee" ? ctx.actor.id : undefined,
             clientPaymentId,
@@ -86,7 +80,7 @@ export const recordPayment = async (ctx, sessionId, input) => {
     if (!isDuplicateKey(error)) throw error;
     // Another request paid this bill first: the same payment, or a different one.
     const replay = await findReplay(ctx.restaurantId, sessionId, clientPaymentId);
-    if (replay) return { payment: serializePayment(replay), replayed: true };
+    if (replay) return { payment: replay, replayed: true };
     throw new AppError("BILL_PAID", "This bill is paid");
   } finally {
     await mongoSession.endSession();
@@ -102,5 +96,67 @@ export const recordPayment = async (ctx, sessionId, input) => {
       captureException(error);
     }
   }
-  return { payment: serializePayment(result.payment), replayed: result.replayed };
+  return result;
+};
+
+// Records that staff took the bill's money in cash or at the card terminal.
+// Returns { payment, replayed }; a replay is the payment an earlier request
+// with the same clientPaymentId recorded.
+export const recordPayment = async (ctx, sessionId, input) => {
+  await findSession(ctx.restaurantId, sessionId);
+  const payload = parseOrThrow(recordPaymentSchema, input);
+  const { payment, replayed } = await payBill(ctx, sessionId, {
+    method: payload.method,
+    clientPaymentId: payload.clientPaymentId,
+    settle: async (bill, mongoSession) => {
+      if (bill.totalCents === 0) {
+        throw new AppError("BILL_EMPTY", "The bill is empty; close the table instead");
+      }
+      if (bill.totalCents !== payload.expectedTotalCents) {
+        throw new AppError("BILL_CHANGED", "The bill changed; check the new total", undefined, {
+          totalCents: bill.totalCents,
+        });
+      }
+      await touchSession(ctx.restaurantId, sessionId, mongoSession);
+      return bill.totalCents;
+    },
+  });
+  return { payment: serializePayment(payment), replayed };
+};
+
+// Why an online payment that completed cannot become the bill's Payment
+// (a Late Payment, GLOSSARY.md); the reasons are OnlinePaymentRefund's.
+const latePayment = (reason) =>
+  new AppError("LATE_PAYMENT", "The online payment came too late for this bill", 409, { reason });
+
+// Records the guest's online payment once Stripe says the Checkout Session
+// is paid. Only the Checkout Session the bill is frozen for pays it: the
+// Payment's amount is the frozen bill's, the Checkout Session id is its
+// clientPaymentId, so a repeated event replays, and the session is open
+// again. Anything else throws LATE_PAYMENT with the reason.
+export const recordOnlinePayment = async (ctx, sessionId, checkoutSessionId) => {
+  try {
+    return await payBill(ctx, sessionId, {
+      method: "ONLINE",
+      clientPaymentId: checkoutSessionId,
+      settle: async (bill, mongoSession) => {
+        const session = await TableSession.findOne({ _id: sessionId, restaurantId: ctx.restaurantId })
+          .select("status onlinePayment")
+          .session(mongoSession)
+          .lean();
+        if (session.status === "closed") throw latePayment("SESSION_CLOSED");
+        if (session.status !== "paying" || session.onlinePayment?.checkoutSessionId !== checkoutSessionId) {
+          throw latePayment("BILL_NOT_FROZEN");
+        }
+        await TableSession.updateOne(
+          { _id: sessionId, restaurantId: ctx.restaurantId },
+          { $set: { status: "open" }, $unset: { onlinePayment: 1 } }
+        ).session(mongoSession);
+        return session.onlinePayment.amountCents;
+      },
+    });
+  } catch (error) {
+    if (error?.code === "BILL_PAID") throw latePayment("BILL_ALREADY_PAID");
+    throw error;
+  }
 };

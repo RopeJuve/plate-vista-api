@@ -3,6 +3,7 @@ import { AppError } from "../../shared/errors.js";
 import { logger } from "../../shared/logger.js";
 import { parseOrThrow } from "../../shared/validate.js";
 import { isTseActive } from "../tse/tse.service.js";
+import { completeOnlinePayment, expireOnlinePayment } from "../payments/onlinePayment.service.js";
 import { updatePayoutAccountSchema } from "./payout.schemas.js";
 import {
   assertStripeConfigured,
@@ -126,8 +127,12 @@ export const startPayoutOnboarding = async (restaurantId) => {
 };
 
 // One handler per event type; later slices add theirs. Every handler must be
-// safe to run twice for the same event.
-const HANDLERS = {};
+// safe to run twice for the same event. The wrappers keep the import cycle
+// with the online payments harmless whichever module loads first.
+const HANDLERS = {
+  "checkout.session.completed": (event) => completeOnlinePayment(event),
+  "checkout.session.expired": (event) => expireOnlinePayment(event),
+};
 
 export const handleStripeEvent = async (event) => {
   const handler = HANDLERS[event?.type];

@@ -8,7 +8,8 @@ import { findSession } from "../ordering/session.service.js";
 import { canPayBillOnline } from "../payouts/payout.service.js";
 import { assertOnlinePaymentsConfigured, createOnlinePaymentCheckout } from "../payouts/stripe.js";
 import { mergeReceiptLines } from "./money.js";
-import { publishBillFrozen } from "./events.js";
+import { recordOnlinePayment } from "./payment.service.js";
+import { publishBillFrozen, publishBillUnfrozen } from "./events.js";
 import { AppError } from "../../shared/errors.js";
 import { captureException, logger } from "../../shared/logger.js";
 
@@ -131,4 +132,61 @@ export const startOnlinePayment = async (ctx, sessionId) => {
   );
   if (froze) publishBillFrozen({ restaurantId: ctx.restaurantId, sessionId, expiresAt: attempt.expiresAt });
   return present({ ...attempt, url: checkout.url });
+};
+
+// The bill a Checkout Session was made for, from the metadata
+// startOnlinePayment gave it; null when it names none.
+const billOf = (checkout) => {
+  const { restaurantId, sessionId } = checkout?.metadata || {};
+  if (!mongoose.isValidObjectId(restaurantId) || !mongoose.isValidObjectId(sessionId)) return null;
+  return { restaurantId, sessionId };
+};
+
+const STRIPE_ACTOR = { type: "system", id: "stripe" };
+
+// Stripe's `checkout.session.completed`: the guest has paid, so the webhook,
+// and only the webhook, records the online Payment. A payment that cannot
+// pay the bill is a Late Payment; it is logged until refunds exist (#65).
+export const completeOnlinePayment = async (event) => {
+  const checkout = event.data?.object;
+  if (checkout?.payment_status !== "paid") return;
+  const bill = billOf(checkout);
+  const log = { eventId: event.id, checkoutSessionId: checkout.id, ...bill };
+  if (!bill) {
+    logger.warn(log, "paid Checkout Session names no bill; ignored");
+    return;
+  }
+  const ctx = { restaurantId: bill.restaurantId, requestId: event.id, actor: STRIPE_ACTOR };
+  try {
+    await recordOnlinePayment(ctx, bill.sessionId, checkout.id);
+  } catch (error) {
+    if (error?.code === "LATE_PAYMENT") {
+      logger.warn({ ...log, reason: error.details.reason }, "late online payment; not recorded");
+      return;
+    }
+    if (error?.code === "NOT_FOUND" || error?.code === "VALIDATION") {
+      logger.warn({ ...log, err: error }, "paid Checkout Session for an unknown bill; ignored");
+      return;
+    }
+    throw error;
+  }
+};
+
+// Stripe's `checkout.session.expired`: the guest never paid, so the bill
+// frozen for this Checkout Session opens again. An old or other Checkout
+// Session changes nothing.
+export const expireOnlinePayment = async (event) => {
+  const checkout = event.data?.object;
+  const bill = billOf(checkout);
+  if (!bill || !checkout.id) return;
+  const result = await TableSession.updateOne(
+    {
+      _id: bill.sessionId,
+      restaurantId: bill.restaurantId,
+      status: "paying",
+      "onlinePayment.checkoutSessionId": checkout.id,
+    },
+    { $set: { status: "open" }, $unset: { onlinePayment: 1 } }
+  );
+  if (result.modifiedCount > 0) publishBillUnfrozen(bill);
 };
