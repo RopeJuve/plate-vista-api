@@ -61,3 +61,11 @@ export const publishBillFrozen = ({ restaurantId, sessionId, expiresAt }) =>
     sessionId,
     message: event("bill.frozen", { sessionId: String(sessionId), expiresAt: expiresAt.toISOString() }),
   });
+
+// The bill is open again without being paid (PROTOCOL 2.5).
+export const publishBillUnfrozen = ({ restaurantId, sessionId }) =>
+  send({
+    restaurantId,
+    sessionId,
+    message: event("bill.unfrozen", { sessionId: String(sessionId) }),
+  });
