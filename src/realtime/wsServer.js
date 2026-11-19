@@ -4,12 +4,15 @@ import { verifyToken } from "../shared/auth.js";
 import { AppError } from "../shared/errors.js";
 import { logger } from "../shared/logger.js";
 import { join, leaveAll, staffRoom, sessionRoom } from "./rooms.js";
-import { handleMessage } from "./handlers.js";
+import { handleMessage, MAX_MESSAGES } from "./handlers.js";
 import { assertLiveSession } from "../modules/ordering/session.service.js";
 
 export const HEARTBEAT_INTERVAL_MS = 30_000;
 export const MAX_PAYLOAD_BYTES = 16 * 1024;
 export const PROTOCOL_VERSION = "2";
+// Held messages are handled through the rate limit once admitted, so hold no
+// more than it lets through.
+export const MAX_HELD_MESSAGES = MAX_MESSAGES;
 
 const allowedOrigins = () =>
   (process.env.CORS_ORIGIN || "")
@@ -127,8 +130,17 @@ export const attachWebSocket = (server) => {
     let admitted = false;
     let pending = [];
     connection.on("message", (message) => {
-      if (admitted) handleMessage(message, connection, auth);
-      else pending?.push(message);
+      if (admitted) {
+        handleMessage(message, connection, auth);
+        return;
+      }
+      if (!pending) return;
+      if (pending.length >= MAX_HELD_MESSAGES) {
+        pending = null;
+        connection.close(1008, "too many messages");
+        return;
+      }
+      pending.push(message);
     });
     connection.on("close", () => {
       pending = null;

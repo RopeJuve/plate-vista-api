@@ -14,6 +14,7 @@ import { connectToDatabase, disconnectDatabase } from "../../src/db/db.js";
 import { hashPassword, generateToken, generateTableToken } from "../../src/shared/auth.js";
 import { clearCapturedLogs, capturedLogs } from "../../src/shared/logger.js";
 import { publish, clearPublished, published } from "../../src/realtime/events.js";
+import { roomSize, sessionRoom } from "../../src/realtime/rooms.js";
 import { stock } from "../../src/modules/ordering/stock.js";
 import {
   cancelOrder,
@@ -1882,6 +1883,83 @@ test("a guest message sent while the socket's session is still being checked is 
   } finally {
     TableSession.findOne = realFindOne;
     releaseLookup();
+  }
+});
+
+const holdSessionLookup = () => {
+  const realFindOne = TableSession.findOne;
+  let release;
+  const held = new Promise((resolve) => {
+    release = resolve;
+  });
+  TableSession.findOne = function (...args) {
+    TableSession.findOne = realFindOne;
+    return held.then(() => realFindOne.apply(this, args));
+  };
+  return {
+    release: () => release(),
+    restore: () => {
+      TableSession.findOne = realFindOne;
+      release();
+    },
+  };
+};
+
+const sendOrder = (client, item) => {
+  const requestId = randomUUID();
+  client.ws.send(JSON.stringify({
+    type: "order.create",
+    requestId,
+    payload: { clientOrderId: randomUUID(), items: itemsOf(item) },
+  }));
+  return requestId;
+};
+
+test("10 guest messages sent while the session is checked are all handled and acked ok", async () => {
+  const place = await fixture();
+  const session = await openOrJoinSessionSafe(place.restaurant._id, place.table._id);
+  const lookup = holdSessionLookup();
+  try {
+    const guest = await connect(generateTableToken({
+      restaurantId: place.restaurant._id,
+      tableId: place.table._id,
+      sessionId: session._id,
+    }));
+    const requestIds = Array.from({ length: 10 }, () => sendOrder(guest, place.item));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    lookup.release();
+    for (const requestId of requestIds) {
+      const ack = await waitFor(
+        guest.messages,
+        (message) => message.type === "ack" && message.requestId === requestId
+      );
+      assert.equal(ack.ok, true, JSON.stringify(ack));
+    }
+    assert.equal(guest.closeCode(), null);
+  } finally {
+    lookup.restore();
+  }
+});
+
+test("an 11th guest message sent while the session is checked closes the socket with 1008", async () => {
+  const place = await fixture();
+  const session = await openOrJoinSessionSafe(place.restaurant._id, place.table._id);
+  const lookup = holdSessionLookup();
+  try {
+    const guest = await connect(generateTableToken({
+      restaurantId: place.restaurant._id,
+      tableId: place.table._id,
+      sessionId: session._id,
+    }));
+    for (let i = 0; i < 11; i += 1) sendOrder(guest, place.item);
+    assert.equal(await waitForClose(guest, 1008), 1008);
+    lookup.release();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(guest.messages.filter((message) => message.type === "ack").length, 0);
+    assert.equal(await Order.countDocuments({ restaurantId: place.restaurant._id, sessionId: session._id }), 0);
+    assert.equal(roomSize(sessionRoom(place.restaurant._id, session._id)), 0);
+  } finally {
+    lookup.restore();
   }
 });
 

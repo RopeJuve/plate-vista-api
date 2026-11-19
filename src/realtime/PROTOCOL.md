@@ -70,6 +70,7 @@ The server pings every 30 seconds. A socket that misses one pong is terminated o
 | `4004` | session closed | guest: show thank-you screen, don't reconnect |
 | `4008` | too many violations (3 rate-limit hits) | wait, then reconnect |
 | `1001` | server shutting down (SIGTERM) | reconnect with backoff |
+| `1008` | too many messages (more than 10 sent before the socket was admitted) | wait for the first ack or reply before sending more, then reconnect |
 | `1009` | message larger than 16 KB | shrink the payload and reconnect |
 
 Closing a session sends `session.closed`, then closes the guest sockets of that session with `4004`. Staff sockets stay open.
@@ -269,6 +270,7 @@ Money on an order is integer cents (`unitPriceCents`, `lineTotalCents`, `totalCe
 |---|---|---|
 | Message size | 16 KB | socket closed with `1009` |
 | Rate limit | 10 messages / 10 seconds per socket | ack `RATE_LIMITED` with `details.retryAfterMs` |
+| Messages held before admission | 10 per socket (sent while a guest's session is still being checked; handled after admission under the rate limit) | socket closed with `1008` |
 | Items per order | 50 | ack `VALIDATION`, `details.fields.items` |
 | Quantity per item | 99 | ack `VALIDATION`, `details.fields["items.0.quantity"]` |
 | Notes length | 200 characters | ack `VALIDATION`, `details.fields["items.0.notes"]` |
