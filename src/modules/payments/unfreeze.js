@@ -2,6 +2,7 @@ import Restaurant from "../restaurants/restaurant.model.js";
 import TableSession from "../ordering/session.model.js";
 import { expireOnlinePaymentCheckout } from "../payouts/stripe.js";
 import { publishBillUnfrozen } from "./events.js";
+import { reconcileOnlinePayment } from "./onlinePayment.service.js";
 import { AppError } from "../../shared/errors.js";
 import { captureException, logger } from "../../shared/logger.js";
 
@@ -49,7 +50,20 @@ export const unfreezeBill = async (ctx, sessionId, { evenIfStripeFails = false }
         throw new AppError("PAYMENT_PROVIDER_ERROR", "The payment provider could not stop the online payment");
       }
     }
-    if (outcome === "complete") throw payingOnline();
+    if (outcome === "complete") {
+      let recorded = false;
+      try {
+        recorded = await reconcileOnlinePayment(ctx.restaurantId, sessionId);
+      } catch (error) {
+        logger.error({ ...log, err: error }, "recording the completed online payment failed");
+        captureException(error);
+      }
+      if (!recorded) throw payingOnline();
+      const after = await TableSession.findOne({ _id: sessionId, restaurantId: ctx.restaurantId })
+        .select("status")
+        .lean();
+      return { status: after.status };
+    }
   }
 
   // Only this online payment's freeze: something else may have moved it on.

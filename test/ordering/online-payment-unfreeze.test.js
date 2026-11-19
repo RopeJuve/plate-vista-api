@@ -228,28 +228,52 @@ test("cash on a frozen bill expires the Checkout Session, then records the Payme
   assert.deepEqual(order, ["bill.unfrozen", "bill.paid"]);
 });
 
-test("the guest has just paid: unfreeze, cash and close answer 409 BILL_PAYING_ONLINE and the bill stays frozen", async () => {
+test("the guest has just paid but no webhook came: unfreeze, cash and close record the online Payment from Stripe", async () => {
+  const attempts = [
+    ["guest cancel", (place) => place.cancel(), 200],
+    ["owner unfreeze", (place) => place.cancel(place.staff.owner), 200],
+    // The bill is paid online, so cash is refused.
+    ["cash", (place) => place.pay(), 409, "BILL_PAID"],
+    ["waiter close", (place) => place.close(place.staff.waiter), 200],
+  ];
+  for (const [name, attempt, status, code] of attempts) {
+    const place = await fixture();
+    const checkoutSessionId = await place.start();
+    stripe.completeCheckoutSession(checkoutSessionId);
+    clearPublished();
+
+    const res = await attempt(place);
+    assert.equal(res.status, status, `${name}: ${JSON.stringify(res.body)}`);
+    if (code) assert.equal(res.body.code, code, name);
+    const payments = await place.payments();
+    assert.equal(payments.length, 1, name);
+    assert.equal(payments[0].method, "ONLINE", name);
+    assert.equal(payments[0].clientPaymentId, checkoutSessionId, name);
+    assert.equal(payments[0].amountCents, 1450, name);
+    assert.notEqual((await place.session()).status, "paying", name);
+    assert.equal(eventsNamed("bill.paid").length, 1, name);
+    assert.equal(eventsNamed("bill.unfrozen").length, 0, name);
+  }
+});
+
+test("the guest has just paid but Stripe cannot be read: 409 BILL_PAYING_ONLINE and the bill stays frozen", async () => {
   const place = await fixture();
   const checkoutSessionId = await place.start();
   stripe.completeCheckoutSession(checkoutSessionId);
   clearPublished();
-
-  const attempts = [
-    ["guest cancel", () => place.cancel()],
-    ["owner unfreeze", () => place.cancel(place.staff.owner)],
-    ["cash", () => place.pay()],
-    ["close", () => place.close(place.staff.owner, { unpaidReason: "left" })],
-  ];
-  for (const [name, attempt] of attempts) {
-    const res = await attempt();
-    assert.equal(res.status, 409, `${name}: ${JSON.stringify(res.body)}`);
-    assert.equal(res.body.code, "BILL_PAYING_ONLINE", name);
-  }
-  const session = await place.session();
-  assert.equal(session.status, "paying");
-  assert.equal(session.onlinePayment.checkoutSessionId, checkoutSessionId);
+  // expire fails as completed, its retrieve answers, then the record's retrieve fails.
+  const real = stripe.checkout.sessions.retrieve;
+  let reads = 0;
+  stripe.checkout.sessions.retrieve = async (...args) => {
+    reads += 1;
+    if (reads > 1) throw Object.assign(new Error("down"), { type: "StripeAPIError" });
+    return real(...args);
+  };
+  const res = await place.cancel();
+  assert.equal(res.status, 409, JSON.stringify(res.body));
+  assert.equal(res.body.code, "BILL_PAYING_ONLINE");
+  assert.equal((await place.session()).status, "paying");
   assert.equal((await place.payments()).length, 0);
-  assert.equal(eventsNamed("bill.unfrozen").length, 0);
 });
 
 test("Stripe unreachable during a staff payment: the bill unfreezes and the payment is recorded", async () => {

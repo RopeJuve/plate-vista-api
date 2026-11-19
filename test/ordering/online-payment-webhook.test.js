@@ -87,7 +87,9 @@ const fixture = async () => {
   };
   const session = () => TableSession.findOne({ _id: sessionId, restaurantId: restaurant._id }).lean();
   const payments = () => Payment.find({ restaurantId: restaurant._id, sessionId }).lean();
-  return { restaurant, table, sessionId, order, ctx, guestCtx, items, start, session, payments };
+    const pollReceipt = () =>
+    request(app).get(`/api/v1/sessions/${sessionId}/receipt-token`).set("Authorization", `Bearer ${guestToken}`);
+  return { restaurant, table, sessionId, order, ctx, guestCtx, items, start, session, payments, pollReceipt };
 };
 
 // A v1 Checkout Session event, as Stripe sends it for a direct charge on the
@@ -316,5 +318,30 @@ test("expired after the completed event changes nothing", async () => {
   clearPublished();
   assert.equal((await expired(place, checkoutSessionId)).status, 200);
   assert.equal(eventsNamed("bill.unfrozen").length, 0);
+  assert.equal((await place.payments()).length, 1);
+});
+
+test("the guest polls for the receipt and the webhook never came: Stripe is asked and the Payment recorded", async () => {
+  const place = await fixture();
+  const checkoutSessionId = await place.start();
+
+  const waiting = await place.pollReceipt();
+  assert.equal(waiting.status, 202, JSON.stringify(waiting.body));
+  assert.equal((await place.payments()).length, 0);
+
+  stripe.completeCheckoutSession(checkoutSessionId);
+  clearPublished();
+  const res = await place.pollReceipt();
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  const [payment] = await place.payments();
+  assert.equal(payment.method, "ONLINE");
+  assert.equal(payment.clientPaymentId, checkoutSessionId);
+  assert.equal(payment.amountCents, 1450);
+  assert.deepEqual(res.body, { receiptToken: payment.receiptToken });
+  assert.equal((await place.session()).status, "open");
+  assert.equal(eventsNamed("bill.paid").length, 1);
+
+  // The webhook arriving later replays: still one Payment.
+  assert.equal((await completed(place, checkoutSessionId)).status, 200);
   assert.equal((await place.payments()).length, 1);
 });

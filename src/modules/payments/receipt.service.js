@@ -6,7 +6,8 @@ import { getBillLines } from "../ordering/order.service.js";
 import { mergeReceiptLines, totalsByVat } from "./money.js";
 import { AppError } from "../../shared/errors.js";
 import { toIso as iso } from "../../shared/iso.js";
-import { logger } from "../../shared/logger.js";
+import { captureException, logger } from "../../shared/logger.js";
+import { reconcileOnlinePayment } from "./onlinePayment.service.js";
 
 const RECEIPT_TOKEN_PATTERN = /^[0-9a-f]{32}$/;
 
@@ -87,10 +88,27 @@ export const getReceipt = async (receiptToken) => {
 // What the guest's app polls after paying: the receipt token once the bill
 // has a payment, or PAYING while an online payment is still in progress.
 // Works after the session is closed, so a guest can still find their receipt.
+// While paying, Stripe is asked too, so a payment whose webhook never came
+// is still recorded and the guest gets their receipt.
+const findReceiptToken = (restaurantId, sessionId) =>
+  Payment.findOne({ restaurantId, sessionId }).select("receiptToken").lean();
+
 export const getReceiptTokenForSession = async (restaurantId, sessionId) => {
-  const payment = await Payment.findOne({ restaurantId, sessionId }).select("receiptToken").lean();
+  const payment = await findReceiptToken(restaurantId, sessionId);
   if (payment) return { receiptToken: payment.receiptToken };
   const session = await TableSession.findOne({ _id: sessionId, restaurantId }).select("status").lean();
-  if (session?.status === "paying") return { status: "PAYING" };
-  throw notFound();
+  if (session?.status !== "paying") throw notFound();
+  try {
+    if (await reconcileOnlinePayment(restaurantId, sessionId)) {
+      const recorded = await findReceiptToken(restaurantId, sessionId);
+      if (recorded) return { receiptToken: recorded.receiptToken };
+    }
+  } catch (error) {
+    // Stripe unreachable or not set up: keep answering PAYING; the guest asks again.
+    if (error?.code !== "STRIPE_NOT_CONFIGURED") {
+      logger.error({ restaurantId: String(restaurantId), sessionId: String(sessionId), err: error }, "checking the online payment with Stripe failed");
+      captureException(error);
+    }
+  }
+  return { status: "PAYING" };
 };

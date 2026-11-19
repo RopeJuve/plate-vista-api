@@ -5,10 +5,12 @@ import Order from "./order.model.js";
 import TableSession from "./session.model.js";
 import Payment from "../payments/payment.model.js";
 import { AppError, duplicateKeyOn } from "../../shared/errors.js";
+import { captureException, logger } from "../../shared/logger.js";
 import { publish } from "../../realtime/events.js";
 import { serializeOrder, serializeSession } from "./serialize.js";
 import { serializePayment } from "../payments/serialize.js";
 import { unfreezeBill } from "../payments/unfreeze.js";
+import { reconcileOnlinePayment } from "../payments/onlinePayment.service.js";
 
 // Short code guests read to each other at the table. No 0/O or 1/I.
 const newJoinCode = customAlphabet("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", 4);
@@ -129,6 +131,14 @@ const unfreezeToClose = async (ctx, sessionId, unpaidReason) => {
     .select("status")
     .lean();
   if (session?.status !== "paying") return;
+  // The guest may have paid on Stripe without the webhook arriving: record it
+  // first, so a paid table closes instead of reading as unpaid.
+  try {
+    if (await reconcileOnlinePayment(ctx.restaurantId, sessionId)) return;
+  } catch (error) {
+    logger.error({ restaurantId: String(ctx.restaurantId), sessionId: String(sessionId), err: error }, "checking the online payment with Stripe failed");
+    captureException(error);
+  }
   if (unpaidReason === undefined && (await unpaidTotalCents(ctx.restaurantId, sessionId, null)) > 0) {
     throw new AppError("BILL_UNPAID", "The bill is not paid yet");
   }

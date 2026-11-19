@@ -158,6 +158,11 @@ export const createOnlinePaymentCheckout = async ({
   return { checkoutSessionId: checkout.id, url: checkout.url };
 };
 
+// Reads a Checkout Session from the restaurant's Payout Account, as Stripe
+// keeps it now: the same object `checkout.session.completed` carries.
+export const retrieveOnlinePaymentCheckout = ({ stripeAccountId, checkoutSessionId }) =>
+  client().checkout.sessions.retrieve(checkoutSessionId, {}, { stripeAccount: stripeAccountId });
+
 // Expires a Checkout Session on the restaurant's Payout Account so the guest
 // can no longer pay it. Returns "expired", or "complete" when the guest has
 // paid it already (Stripe expires only an open one). Any other failure throws.
