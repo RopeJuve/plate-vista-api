@@ -6,7 +6,11 @@ import TableSession from "../ordering/session.model.js";
 import { getBillLines, getSessionBill } from "../ordering/order.service.js";
 import { findSession } from "../ordering/session.service.js";
 import { canPayBillOnline } from "../payouts/payout.service.js";
-import { assertOnlinePaymentsConfigured, createOnlinePaymentCheckout } from "../payouts/stripe.js";
+import {
+  assertOnlinePaymentsConfigured,
+  createOnlinePaymentCheckout,
+  retrieveOnlinePaymentCheckout,
+} from "../payouts/stripe.js";
 import { mergeReceiptLines } from "./money.js";
 import { recordOnlinePayment } from "./payment.service.js";
 import { publishBillFrozen, publishBillUnfrozen } from "./events.js";
@@ -205,4 +209,34 @@ export const expireOnlinePayment = async (event) => {
     { $set: { status: "open" }, $unset: { onlinePayment: 1 } }
   );
   if (result.modifiedCount > 0) publishBillUnfrozen(bill);
+};
+
+// The bill is frozen for a Checkout Session the guest may have paid while the
+// `checkout.session.completed` webhook never arrived (not set up, not
+// forwarded to this server, or still on its way). Asks Stripe, and when the
+// Checkout Session is paid records it exactly as the webhook would: the
+// Checkout Session id is the Payment's clientPaymentId, so the webhook coming
+// later replays. Returns true when Stripe says it is paid and it is now
+// recorded (or refunded as a Late Payment); false otherwise. Stripe failures
+// throw.
+export const reconcileOnlinePayment = async (restaurantId, sessionId) => {
+  const session = await TableSession.findOne({ _id: sessionId, restaurantId })
+    .select("status onlinePayment.checkoutSessionId")
+    .lean();
+  const checkoutSessionId = session?.onlinePayment?.checkoutSessionId;
+  if (session?.status !== "paying" || !checkoutSessionId) return false;
+  const restaurant = await Restaurant.findById(restaurantId).select("payoutAccount.stripeAccountId").lean();
+  const stripeAccountId = restaurant?.payoutAccount?.stripeAccountId;
+  const checkout = await retrieveOnlinePaymentCheckout({ stripeAccountId, checkoutSessionId });
+  if (checkout?.status !== "complete" || checkout.payment_status !== "paid") return false;
+  logger.warn(
+    { restaurantId: String(restaurantId), sessionId: String(sessionId), checkoutSessionId },
+    "online payment paid on Stripe but not recorded; recording it without the webhook"
+  );
+  await completeOnlinePayment({
+    id: `reconcile:${checkoutSessionId}`,
+    account: stripeAccountId,
+    data: { object: checkout },
+  });
+  return true;
 };

@@ -19,7 +19,7 @@ All paths are under `/api/v1`. The tenant comes from the auth token, like existi
 
 ```ts
 VatRate         = 'NORMAL' | 'REDUCED_1'                   // 19 % | 7 %
-PaymentMethod   = 'CASH' | 'CARD_TERMINAL' | 'ONLINE'      // ONLINE only through the Stripe webhook
+PaymentMethod   = 'CASH' | 'CARD_TERMINAL' | 'ONLINE'      // ONLINE only from Stripe: its webhook, or Stripe read back while the bill is frozen
 SignatureStatus = 'PENDING' | 'SIGNED' | 'FAILED'
 ```
 
@@ -209,9 +209,9 @@ Stripe sends the guest back to their own table page, so the app finds the guest 
 - `success_url` = `${GUEST_APP_URL}/r/:slug/t/:qrCode?payment=return`: wait for `bill.paid`, polling `GET /sessions/:id/receipt-token` as a backup (202 `PAYING` = not confirmed yet, 404 = not paid and no longer frozen).
 - `cancel_url` = `${GUEST_APP_URL}/r/:slug/t/:qrCode?payment=cancelled`: call `POST /sessions/:id/online-payment/cancel`.
 
-**Staff win:** recording cash or card (`POST /sessions/:id/payments`) or closing the table on a frozen bill unfreezes it first. Both can answer 409 `BILL_PAYING_ONLINE` when the guest has just paid online. When Stripe cannot be reached, staff still win: the bill unfreezes and the payment or close goes ahead; a guest payment that completes anyway is a Late Payment and is refunded. A close that would fail with `BILL_UNPAID` fails before touching the guest's payment.
+**Staff win:** recording cash or card (`POST /sessions/:id/payments`) or closing the table on a frozen bill unfreezes it first. When the guest has already paid online, the paid Checkout Session is read from Stripe and recorded as the online Payment right there (the webhook may never arrive), so cash answers 409 `BILL_PAID` and close goes ahead; only if Stripe cannot be read then do they answer 409 `BILL_PAYING_ONLINE`. When Stripe cannot be reached, staff still win: the bill unfreezes and the payment or close goes ahead; a guest payment that completes anyway is a Late Payment and is refunded. A close that would fail with `BILL_UNPAID` fails before touching the guest's payment.
 
-When the webhook records the online Payment, `bill.paid` arrives with `method: 'ONLINE'`, and the Payment, receipt and TSE signing are the same as for cash.
+When the webhook records the online Payment (or the server records it after reading the paid Checkout Session from Stripe: on a `receipt-token` poll, an unfreeze, a staff payment or a close), `bill.paid` arrives with `method: 'ONLINE'`, and the Payment, receipt and TSE signing are the same as for cash.
 
 ### Late Payments (owner, admin)
 
