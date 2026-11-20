@@ -1,5 +1,6 @@
 import { closeRoom, emit, emitRestaurant, sessionRoom, staffRoom } from "./rooms.js";
 import { postToRender, runsOnVercel } from "../shared/renderChannel.js";
+import { forgetWaiterCall } from "./waiterCalls.js";
 
 export const published = [];
 
@@ -17,6 +18,7 @@ export const deliverLocal = ({ restaurantId, sessionId, fanout, audience, messag
     emit(sessionRoom(restaurantId, sessionId), message);
   }
   if (message?.event === "session.closed" && sessionId) {
+    forgetWaiterCall(restaurantId, sessionId);
     closeRoom(sessionRoom(restaurantId, sessionId), 4004, "session closed");
   }
 };

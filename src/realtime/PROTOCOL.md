@@ -1,10 +1,14 @@
-# WebSocket protocol v2.5
+# WebSocket protocol v2.6
 
 Orders change only through this socket. REST reads the current board; it does not create or edit orders.
 
-This release is **2.5**. Clients connect with `/ws?v=2`. A missing `v` defaults to `2`. An unknown version is closed with code `4000` and reason `unsupported protocol version`.
+This release is **2.6**. Clients connect with `/ws?v=2`. A missing `v` defaults to `2`. An unknown version is closed with code `4000` and reason `unsupported protocol version`.
 
 ## Changelog
+
+### 2.6
+
+- Call waiter. A guest sends `waiter.call`; staff close it with `waiter.dismiss`. New events to the staff room and the session's room: `waiter.called` and `waiter.dismissed`. Open calls are kept in the socket server's memory only (no database): a socket that connects while one is open receives `waiter.called` for it right after it joins, and a server restart forgets them. Closing the session ends its call.
 
 ### 2.5
 
@@ -190,6 +194,15 @@ Polled by the guest's app after paying, until the payment exists; then open the 
 - `order.cancel` with a `station` cancels that ticket. Without one it cancels every ticket that is not already cancelled, and fails with `INVALID_TRANSITION` if any of them is past `accepted`.
 - A `station` the order has no ticket for is `NOT_FOUND`.
 
+```json
+{ "type": "waiter.call", "requestId": "uuid", "payload": {} }
+{ "type": "waiter.dismiss", "requestId": "uuid", "payload": { "sessionId": "..." } }
+```
+
+`waiter.call` (2.6, guest only) asks for a waiter at the guest's own table. It works while the bill is frozen. While that table's call is open, calling again acks with the open call and sends no event. Ack: `{ "call": { "sessionId", "tableId", "tableNumber", "calledAt" } }`.
+
+`waiter.dismiss` (2.6, staff only) closes the call of a session of their restaurant. Closing a call that is not open acks `ok: true` and sends nothing. Ack: `{ "sessionId": "..." }`.
+
 ### Permissions
 
 | Message | Guest | Staff |
@@ -198,6 +211,8 @@ Polled by the guest's app after paying, until the payment exists; then open the 
 | `order.update` | own session, every ticket `pending` | every ticket `pending` |
 | `order.status` | `FORBIDDEN` | yes, any ticket |
 | `order.cancel` | own session, whole order, no ticket started | a ticket that is `pending` / `accepted` |
+| `waiter.call` | own session | `FORBIDDEN` |
+| `waiter.dismiss` | `FORBIDDEN` | yes |
 
 A guest `order.cancel` with a `station` is `FORBIDDEN`. Staff of any position may move or cancel any ticket; the bar and kitchen screens decide what is shown, not what is allowed.
 
@@ -247,6 +262,8 @@ An unknown `type` is `VALIDATION`. The 11th message within 10 seconds is `RATE_L
 { "type": "event", "event": "payment.signFailed", "data": { "paymentId": "..." } }
 { "type": "event", "event": "bill.frozen", "data": { "sessionId": "...", "expiresAt": "ISO-8601" } }
 { "type": "event", "event": "bill.unfrozen", "data": { "sessionId": "..." } }
+{ "type": "event", "event": "waiter.called", "data": { "sessionId": "...", "tableId": "...", "tableNumber": 7, "calledAt": "ISO-8601" } }
+{ "type": "event", "event": "waiter.dismissed", "data": { "sessionId": "..." } }
 { "type": "event", "event": "online_payment.refunded", "data": { "refund": { "id": "...", "sessionId": "...", "tableNumber": 1, "amountCents": 1800, "reason": "BILL_ALREADY_PAID|BILL_NOT_FROZEN|SESSION_CLOSED", "refundedAt": "ISO-8601" } } }
 ```
 

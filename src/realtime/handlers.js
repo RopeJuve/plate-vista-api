@@ -5,6 +5,7 @@ import { zodFieldErrors } from "../shared/validate.js";
 import { inboundMessageSchema } from "../modules/ordering/order.schemas.js";
 import { executeOrderCommand } from "../modules/ordering/order.service.js";
 import { assertOpenSession } from "../modules/ordering/session.service.js";
+import { executeWaiterCommand, isWaiterMessage, waiterMessageSchema } from "./waiterCalls.js";
 
 const WINDOW_MS = 10_000;
 export const MAX_MESSAGES = 10;
@@ -80,7 +81,8 @@ export const handleMessage = async (bytes, connection, auth) => {
       return;
     }
 
-    const parsed = inboundMessageSchema.safeParse(raw);
+    const waiter = isWaiterMessage(raw);
+    const parsed = (waiter ? waiterMessageSchema : inboundMessageSchema).safeParse(raw);
     if (!parsed.success) {
       const fields = zodFieldErrors(parsed.error);
       logger.error(
@@ -100,6 +102,12 @@ export const handleMessage = async (bytes, connection, auth) => {
           details: { fields },
         },
       });
+      return;
+    }
+
+    // A waiter call works while the bill is frozen too: it checks its own session.
+    if (waiter) {
+      ack({ ok: true, data: await executeWaiterCommand(auth, parsed.data) });
       return;
     }
 
