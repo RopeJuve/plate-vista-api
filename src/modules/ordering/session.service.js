@@ -100,6 +100,13 @@ export const assertLiveSession = async (restaurantId, sessionId) => {
   return session;
 };
 
+// For a guest calling the waiter: a live session and the number staff see on its table.
+export const findCallingTable = async (restaurantId, sessionId) => {
+  const session = await assertLiveSession(restaurantId, sessionId);
+  const table = await Table.findOne({ _id: session.tableId, restaurantId }).select("tableNumber").lean();
+  return { sessionId: String(session._id), tableId: String(session.tableId), tableNumber: table?.tableNumber ?? null };
+};
+
 // Writes the session document so that transactions changing one bill (a
 // payment, a cancel, a close) conflict with each other and retry.
 export const touchSession = async (restaurantId, sessionId, mongoSession) => {

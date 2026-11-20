@@ -5,6 +5,7 @@ import { AppError } from "../shared/errors.js";
 import { logger } from "../shared/logger.js";
 import { join, leaveAll, staffRoom, sessionRoom } from "./rooms.js";
 import { handleMessage, MAX_MESSAGES } from "./handlers.js";
+import { openWaiterCalls } from "./waiterCalls.js";
 import { assertLiveSession } from "../modules/ordering/session.service.js";
 
 export const HEARTBEAT_INTERVAL_MS = 30_000;
@@ -170,6 +171,7 @@ export const attachWebSocket = (server) => {
     connection.on("pong", () => {
       connection.isAlive = true;
     });
+    for (const event of openWaiterCalls(auth)) connection.send(JSON.stringify(event));
     admitted = true;
     const held = pending;
     pending = null;
