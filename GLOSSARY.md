@@ -83,7 +83,7 @@ The number that identifies a receipt: the TSE's transaction number for its payme
 _Avoid_: Bill number, invoice number
 
 **Service Period**:
-The time a receipt covers: from the bill's first order to its payment.
+The time a receipt covers: from the bill's first order that was not wholly cancelled to its payment.
 _Avoid_: Visit duration, Leistungszeitraum (in English copy)
 
 **Hospitality Section**:
