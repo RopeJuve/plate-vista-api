@@ -59,19 +59,31 @@ _Avoid_: Order, sub-order
 ### Paying
 
 **Bill**:
-Everything a table orders during one visit, from its first order until staff close the table; its total leaves out cancelled tickets. Guests pay for the whole bill, not for each order, and once paid it takes no more orders or cancellations. While a guest is paying online the bill is frozen: it takes no orders or cancellations until the payment completes or is abandoned.
+Everything a table orders during one visit, from its first order until staff close the table; its total leaves out cancelled tickets. Guests pay for the whole bill, not for each order, and once paid it takes no more orders or cancellations. While a payment is in progress (a guest paying online, or a card reader waiting for the card) the bill is frozen: it takes no orders or cancellations until that payment completes, fails, or is cancelled or abandoned. A bill has at most one payment in progress.
 _Avoid_: Check, tab, order (an order is one round on the bill)
 
 **Payment**:
-Settling a bill, in cash, by card at the restaurant's terminal, or online; recorded by staff, or by the payment provider for online payments, never by the guest's device.
+Settling a bill, in cash, by card on a card reader or at a card terminal, or online. Staff record cash and card terminal payments; the payment provider records card reader and online payments; the guest's device never does.
 _Avoid_: Checkout (in product language), transaction (a transaction is the till's record)
+
+**Card Reader**:
+A Stripe card reader registered to the restaurant, which staff send a bill's payment to from Plate Vista; the amount always comes from the bill, never typed on the reader. If the bill is settled some other way before the card goes through, the guest's card is released and never charged. The owner or an admin adds and removes card readers.
+_Avoid_: Terminal (a card terminal is one Plate Vista does not talk to), POS device
+
+**Simulated Reader**:
+A card reader that exists only while Plate Vista runs against Stripe's test mode, for trying card reader payments without hardware.
+_Avoid_: Test reader, fake reader
+
+**Card Terminal**:
+Any card machine at the restaurant that Plate Vista does not talk to; staff take the card on it and record the payment by hand.
+_Avoid_: Card reader, EC-Gerät (in English copy)
 
 **Late Payment**:
 An online payment that completes after its bill was already paid, was no longer frozen, or its table was closed; it is refunded in full automatically and is never a Payment.
 _Avoid_: Double payment, overpayment
 
 **Payout Account**:
-The restaurant's own account at Stripe, which guests' online payments are paid into. The owner sets it up from the dashboard on a Stripe-hosted page, and only the owner may manage it.
+The restaurant's own account at Stripe, which guests' online and card reader payments are paid into. The owner sets it up from the dashboard on a Stripe-hosted page, and only the owner may manage it.
 _Avoid_: Connect account, Stripe account (in product language)
 
 **Receipt**:
