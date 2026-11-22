@@ -14,6 +14,7 @@
     "migrate:category-vat": "node scripts/migrate-category-vat.js",
     "migrate:tickets": "node scripts/migrate-tickets.js",
     "migrate:drop-menu-price": "node scripts/migrate-drop-menu-price.js",
+    "migrate:card-payments": "node scripts/migrate-card-payments.js",
     "seed:sample-menu": "node scripts/seed-sample-menu.js",
     "vercel-build": "echo hello",
     "test": "node --test --test-concurrency=1 --experimental-test-isolation=process \"test/unit/*.test.js\" \"test/ordering/*.test.js\"",

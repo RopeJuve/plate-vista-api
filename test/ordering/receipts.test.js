@@ -307,7 +307,7 @@ test("an online payment's kept details are on the receipt; a cash payment has no
     {
       $set: {
         method: "ONLINE",
-        online: {
+        card: {
           type: "card",
           brand: "visa",
           last4: "4242",

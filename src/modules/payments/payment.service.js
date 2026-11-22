@@ -144,18 +144,23 @@ export const recordOnlinePayment = async (ctx, sessionId, checkoutSessionId) => 
       clientPaymentId: checkoutSessionId,
       settle: async (bill, mongoSession) => {
         const session = await TableSession.findOne({ _id: sessionId, restaurantId: ctx.restaurantId })
-          .select("status onlinePayment")
+          .select("status paymentInProgress")
           .session(mongoSession)
           .lean();
         if (session.status === "closed") throw latePayment("SESSION_CLOSED");
-        if (session.status !== "paying" || session.onlinePayment?.checkoutSessionId !== checkoutSessionId) {
+        const attempt = session.paymentInProgress;
+        if (
+          session.status !== "paying" ||
+          attempt?.kind !== "online" ||
+          attempt.checkoutSessionId !== checkoutSessionId
+        ) {
           throw latePayment("BILL_NOT_FROZEN");
         }
         await TableSession.updateOne(
           { _id: sessionId, restaurantId: ctx.restaurantId },
-          { $set: { status: "open" }, $unset: { onlinePayment: 1 } }
+          { $set: { status: "open" }, $unset: { paymentInProgress: 1 } }
         ).session(mongoSession);
-        return session.onlinePayment.amountCents;
+        return attempt.amountCents;
       },
     });
   } catch (error) {

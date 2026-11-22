@@ -11,6 +11,7 @@ import { connectToDatabase, disconnectDatabase } from "../../src/db/db.js";
 import { generateTableToken, generateToken, hashPassword } from "../../src/shared/auth.js";
 import { cancelOrder, changeStatus, createOrder, updateOrder } from "../../src/modules/ordering/order.service.js";
 import Payment from "../../src/modules/payments/payment.model.js";
+import TableSession from "../../src/modules/ordering/session.model.js";
 import { signing } from "../../src/modules/payments/signing.js";
 import MenuItem from "../../src/modules/menu/menuItem.model.js";
 import Table from "../../src/modules/tables/table.model.js";
@@ -236,6 +237,13 @@ test("a guest starts an online payment: the bill freezes and Stripe gets the who
   const bill = await place.bill();
   assert.equal(bill.body.session.status, "paying");
   assert.equal(bill.body.canPayOnline, false);
+
+  // The frozen bill knows which kind of payment is in progress.
+  const session = await TableSession.findOne({ _id: place.sessionId, restaurantId: place.restaurant._id }).lean();
+  assert.equal(session.paymentInProgress.kind, "online");
+  assert.equal(session.paymentInProgress.amountCents, 2450);
+  assert.equal(session.paymentInProgress.url, res.body.url);
+  assert.equal("onlinePayment" in session, false);
 });
 
 test("bill.frozen goes to staff and the session's room", async () => {

@@ -83,7 +83,7 @@ const fixture = async () => {
       .set("Authorization", `Bearer ${guestToken}`);
     assert.equal(res.status, 200, JSON.stringify(res.body));
     const session = await TableSession.findOne({ _id: sessionId, restaurantId: restaurant._id }).lean();
-    return session.onlinePayment.checkoutSessionId;
+    return session.paymentInProgress.checkoutSessionId;
   };
   const session = () => TableSession.findOne({ _id: sessionId, restaurantId: restaurant._id }).lean();
   const payments = () => Payment.find({ restaurantId: restaurant._id, sessionId }).lean();
@@ -189,7 +189,7 @@ test("completed on a frozen bill records one ONLINE Payment, reopens the session
 
   const session = await place.session();
   assert.equal(session.status, "open");
-  assert.equal(session.onlinePayment, undefined);
+  assert.equal(session.paymentInProgress, undefined);
 
   const paid = eventsNamed("bill.paid");
   assert.equal(paid.length, 1);
@@ -285,7 +285,7 @@ test("expired on a frozen bill unfreezes it and publishes bill.unfrozen", async 
   assert.equal(res.status, 200, JSON.stringify(res.body));
   const session = await place.session();
   assert.equal(session.status, "open");
-  assert.equal(session.onlinePayment, undefined);
+  assert.equal(session.paymentInProgress, undefined);
   const unfrozen = eventsNamed("bill.unfrozen");
   assert.equal(unfrozen.length, 1);
   assert.equal(unfrozen[0].audience, undefined);
@@ -354,9 +354,9 @@ test("a card payment keeps brand, last 4, funding, wallet, authorization code an
   assert.equal((await completed(place, checkoutSessionId)).status, 200);
 
   const [payment] = await place.payments();
-  assert.match(payment.online.paymentIntentId, /^pi_/);
+  assert.match(payment.card.paymentIntentId, /^pi_/);
   assert.deepEqual(
-    { ...payment.online, paymentIntentId: undefined },
+    { ...payment.card, paymentIntentId: undefined },
     {
       type: "card",
       brand: "mastercard",
@@ -381,8 +381,8 @@ test("a payment that is not by card keeps only its type, the PaymentIntent and t
   assert.equal((await completed(place, checkoutSessionId)).status, 200);
 
   const [payment] = await place.payments();
-  assert.deepEqual(Object.keys(payment.online).sort(), ["authorizedAt", "paymentIntentId", "type"]);
-  assert.equal(payment.online.type, "paypal");
+  assert.deepEqual(Object.keys(payment.card).sort(), ["authorizedAt", "paymentIntentId", "type"]);
+  assert.equal(payment.card.type, "paypal");
 });
 
 test("Stripe failing to give the details still records the payment; a redelivered event fills them in", async () => {
@@ -394,11 +394,11 @@ test("Stripe failing to give the details still records the payment; a redelivere
   assert.equal((await completed(place, checkoutSessionId)).status, 200);
   let [payment] = await place.payments();
   assert.equal(payment.method, "ONLINE");
-  assert.equal(payment.online, undefined);
+  assert.equal(payment.card, undefined);
 
   assert.equal((await completed(place, checkoutSessionId)).status, 200);
   [payment] = await place.payments();
   assert.equal((await place.payments()).length, 1);
-  assert.equal(payment.online.type, "card");
-  assert.equal(payment.online.last4, "4242");
+  assert.equal(payment.card.type, "card");
+  assert.equal(payment.card.last4, "4242");
 });

@@ -22,12 +22,13 @@ const payingOnline = () =>
 // Returns { status } of the session afterwards.
 export const unfreezeBill = async (ctx, sessionId, { evenIfStripeFails = false } = {}) => {
   const session = await TableSession.findOne({ _id: sessionId, restaurantId: ctx.restaurantId })
-    .select("status onlinePayment")
+    .select("status paymentInProgress")
     .lean();
   if (!session) throw new AppError("NOT_FOUND", "Not found", 404);
-  if (session.status !== "paying" || !session.onlinePayment) return { status: session.status };
+  // Only an online payment is ever in progress today.
+  if (session.status !== "paying" || session.paymentInProgress?.kind !== "online") return { status: session.status };
 
-  const { attemptId, checkoutSessionId } = session.onlinePayment;
+  const { attemptId, checkoutSessionId } = session.paymentInProgress;
   // Without a Checkout Session id, Stripe has not made one yet, or never did.
   if (checkoutSessionId) {
     const log = {
@@ -68,8 +69,8 @@ export const unfreezeBill = async (ctx, sessionId, { evenIfStripeFails = false }
 
   // Only this online payment's freeze: something else may have moved it on.
   const result = await TableSession.updateOne(
-    { _id: sessionId, restaurantId: ctx.restaurantId, status: "paying", "onlinePayment.attemptId": attemptId },
-    { $set: { status: "open" }, $unset: { onlinePayment: 1 } }
+    { _id: sessionId, restaurantId: ctx.restaurantId, status: "paying", "paymentInProgress.attemptId": attemptId },
+    { $set: { status: "open" }, $unset: { paymentInProgress: 1 } }
   );
   if (result.modifiedCount > 0) {
     publishBillUnfrozen({ restaurantId: ctx.restaurantId, sessionId });

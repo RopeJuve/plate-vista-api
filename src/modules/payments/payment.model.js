@@ -32,10 +32,11 @@ const tseSchema = new Schema(
   { _id: false }
 );
 
-// How the guest paid online, as Stripe saw it, kept when the payment is
-// recorded so the receipt never has to ask Stripe. `type` is Stripe's payment
-// method type (card, paypal, klarna, ...); the card fields only for cards.
-const onlineDetailsSchema = new Schema(
+// How the guest paid by card (or wallet, PayPal, ...), as Stripe saw it, kept
+// when a payment the provider records is recorded, so the receipt never has
+// to ask Stripe. `type` is Stripe's payment method type (card, paypal,
+// klarna, ...); the card fields only for cards.
+const cardDetailsSchema = new Schema(
   {
     type: { type: String, required: true },
     brand: { type: String },
@@ -61,7 +62,7 @@ const paymentSchema = new Schema(
     clientPaymentId: { type: String, required: true },
     receiptToken: { type: String, required: true, default: newReceiptToken },
     tse: { type: tseSchema, default: () => ({}) },
-    online: { type: onlineDetailsSchema },
+    card: { type: cardDetailsSchema },
   },
   { timestamps: true }
 );

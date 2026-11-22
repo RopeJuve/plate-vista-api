@@ -36,7 +36,8 @@ const expiryFrom = (now) => new Date(Math.ceil((now + EXPIRES_IN_MS + EXPIRY_MAR
 export const applicationFeeCents = (amountCents, bps = Number(process.env.STRIPE_APPLICATION_FEE_BPS) || 0) =>
   Math.round((amountCents * bps) / 10000);
 
-const isRunning = (onlinePayment, now) => Boolean(onlinePayment) && onlinePayment.expiresAt.getTime() > now;
+const isRunningOnline = (attempt, now) =>
+  attempt?.kind === "online" && attempt.expiresAt.getTime() > now;
 
 // Freezes an open bill that may be paid online, or finds the online payment
 // someone at the table already started. Returns { attempt, froze, tableId }.
@@ -47,19 +48,19 @@ const freeze = async (ctx, sessionId) => {
       const now = Date.now();
       const bill = await getSessionBill(ctx, sessionId, mongoSession);
       const session = await TableSession.findOne({ _id: sessionId, restaurantId: ctx.restaurantId })
-        .select("status tableId onlinePayment")
+        .select("status tableId paymentInProgress")
         .session(mongoSession)
         .lean();
-      if (session.status === "paying" && isRunning(session.onlinePayment, now)) {
-        return { attempt: session.onlinePayment, froze: false, tableId: session.tableId };
+      if (session.status === "paying" && isRunningOnline(session.paymentInProgress, now)) {
+        return { attempt: session.paymentInProgress, froze: false, tableId: session.tableId };
       }
       if (!(await canPayBillOnline(ctx.restaurantId, bill))) throw unavailable();
-      const attempt = { attemptId: randomUUID(), amountCents: bill.totalCents, expiresAt: expiryFrom(now) };
+      const attempt = { kind: "online", attemptId: randomUUID(), amountCents: bill.totalCents, expiresAt: expiryFrom(now) };
       // Writing the session makes an order or cancel racing this freeze
       // conflict, so one of them retries and sees the other.
       const result = await TableSession.updateOne(
         { _id: sessionId, restaurantId: ctx.restaurantId, status: "open" },
-        { $set: { status: "paying", onlinePayment: attempt } }
+        { $set: { status: "paying", paymentInProgress: attempt } }
       ).session(mongoSession);
       if (result.matchedCount === 0) throw unavailable();
       return { attempt, froze: true, tableId: session.tableId };
@@ -72,8 +73,8 @@ const freeze = async (ctx, sessionId) => {
 // Puts the bill back to open, unless something else has moved it on since.
 const unfreeze = (ctx, sessionId, attemptId) =>
   TableSession.updateOne(
-    { _id: sessionId, restaurantId: ctx.restaurantId, status: "paying", "onlinePayment.attemptId": attemptId },
-    { $set: { status: "open" }, $unset: { onlinePayment: 1 } }
+    { _id: sessionId, restaurantId: ctx.restaurantId, status: "paying", "paymentInProgress.attemptId": attemptId },
+    { $set: { status: "open" }, $unset: { paymentInProgress: 1 } }
   );
 
 const tablePage = (slug, qrCode) =>
@@ -134,8 +135,8 @@ export const startOnlinePayment = async (ctx, sessionId) => {
   }
 
   await TableSession.updateOne(
-    { _id: sessionId, restaurantId: ctx.restaurantId, "onlinePayment.attemptId": attempt.attemptId },
-    { $set: { "onlinePayment.checkoutSessionId": checkout.checkoutSessionId, "onlinePayment.url": checkout.url } }
+    { _id: sessionId, restaurantId: ctx.restaurantId, "paymentInProgress.attemptId": attempt.attemptId },
+    { $set: { "paymentInProgress.checkoutSessionId": checkout.checkoutSessionId, "paymentInProgress.url": checkout.url } }
   );
   if (froze) publishBillFrozen({ restaurantId: ctx.restaurantId, sessionId, expiresAt: attempt.expiresAt });
   return present({ ...attempt, url: checkout.url });
@@ -154,15 +155,15 @@ const STRIPE_ACTOR = { type: "system", id: "stripe" };
 // Keeps how the guest paid (card, wallet, PayPal, ...) on the Payment for the
 // receipt. Best effort: the payment stands without it, and the receipt then
 // says only "Online"; a redelivered event tries again.
-const keepOnlineDetails = async (payment, stripeAccountId, log) => {
-  if (!payment || payment.online) return;
+const keepCardDetails = async (payment, stripeAccountId, log) => {
+  if (!payment || payment.card) return;
   try {
-    const online = await retrieveOnlinePaymentDetails({
+    const card = await retrieveOnlinePaymentDetails({
       stripeAccountId,
       checkoutSessionId: payment.clientPaymentId,
     });
-    if (!online) return;
-    await Payment.updateOne({ _id: payment._id, restaurantId: payment.restaurantId }, { $set: { online } });
+    if (!card) return;
+    await Payment.updateOne({ _id: payment._id, restaurantId: payment.restaurantId }, { $set: { card } });
   } catch (error) {
     logger.error({ ...log, err: error }, "reading the online payment's details from Stripe failed");
     captureException(error);
@@ -211,7 +212,7 @@ export const completeOnlinePayment = async (event) => {
     }
     throw error;
   }
-  await keepOnlineDetails(recorded?.payment, event.account, log);
+  await keepCardDetails(recorded?.payment, event.account, log);
 };
 
 // Stripe's `checkout.session.expired`: the guest never paid, so the bill
@@ -226,9 +227,10 @@ export const expireOnlinePayment = async (event) => {
       _id: bill.sessionId,
       restaurantId: bill.restaurantId,
       status: "paying",
-      "onlinePayment.checkoutSessionId": checkout.id,
+      "paymentInProgress.kind": "online",
+      "paymentInProgress.checkoutSessionId": checkout.id,
     },
-    { $set: { status: "open" }, $unset: { onlinePayment: 1 } }
+    { $set: { status: "open" }, $unset: { paymentInProgress: 1 } }
   );
   if (result.modifiedCount > 0) publishBillUnfrozen(bill);
 };
@@ -243,9 +245,10 @@ export const expireOnlinePayment = async (event) => {
 // throw.
 export const reconcileOnlinePayment = async (restaurantId, sessionId) => {
   const session = await TableSession.findOne({ _id: sessionId, restaurantId })
-    .select("status onlinePayment.checkoutSessionId")
+    .select("status paymentInProgress.kind paymentInProgress.checkoutSessionId")
     .lean();
-  const checkoutSessionId = session?.onlinePayment?.checkoutSessionId;
+  const attempt = session?.paymentInProgress;
+  const checkoutSessionId = attempt?.kind === "online" ? attempt.checkoutSessionId : undefined;
   if (session?.status !== "paying" || !checkoutSessionId) return false;
   const restaurant = await Restaurant.findById(restaurantId).select("payoutAccount.stripeAccountId").lean();
   const stripeAccountId = restaurant?.payoutAccount?.stripeAccountId;
