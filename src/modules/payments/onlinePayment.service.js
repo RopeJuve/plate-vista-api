@@ -10,7 +10,9 @@ import {
   assertOnlinePaymentsConfigured,
   createOnlinePaymentCheckout,
   retrieveOnlinePaymentCheckout,
+  retrieveOnlinePaymentDetails,
 } from "../payouts/stripe.js";
+import Payment from "./payment.model.js";
 import { mergeReceiptLines } from "./money.js";
 import { recordOnlinePayment } from "./payment.service.js";
 import { publishBillFrozen, publishBillUnfrozen } from "./events.js";
@@ -149,6 +151,24 @@ const billOf = (checkout) => {
 
 const STRIPE_ACTOR = { type: "system", id: "stripe" };
 
+// Keeps how the guest paid (card, wallet, PayPal, ...) on the Payment for the
+// receipt. Best effort: the payment stands without it, and the receipt then
+// says only "Online"; a redelivered event tries again.
+const keepOnlineDetails = async (payment, stripeAccountId, log) => {
+  if (!payment || payment.online) return;
+  try {
+    const online = await retrieveOnlinePaymentDetails({
+      stripeAccountId,
+      checkoutSessionId: payment.clientPaymentId,
+    });
+    if (!online) return;
+    await Payment.updateOne({ _id: payment._id, restaurantId: payment.restaurantId }, { $set: { online } });
+  } catch (error) {
+    logger.error({ ...log, err: error }, "reading the online payment's details from Stripe failed");
+    captureException(error);
+  }
+};
+
 // A Late Payment is refunded in full and recorded. A failed refund is
 // rethrown so the webhook answers 500 and Stripe delivers the event again.
 const refundLate = async (event, bill, checkout, reason, log) => {
@@ -177,8 +197,9 @@ export const completeOnlinePayment = async (event) => {
   // Refunded already: a redelivered event changes nothing.
   if (await isRefunded(bill.restaurantId, checkout.id)) return;
   const ctx = { restaurantId: bill.restaurantId, requestId: event.id, actor: STRIPE_ACTOR };
+  let recorded;
   try {
-    await recordOnlinePayment(ctx, bill.sessionId, checkout.id);
+    recorded = await recordOnlinePayment(ctx, bill.sessionId, checkout.id);
   } catch (error) {
     if (error?.code === "LATE_PAYMENT") {
       await refundLate(event, bill, checkout, error.details.reason, log);
@@ -190,6 +211,7 @@ export const completeOnlinePayment = async (event) => {
     }
     throw error;
   }
+  await keepOnlineDetails(recorded?.payment, event.account, log);
 };
 
 // Stripe's `checkout.session.expired`: the guest never paid, so the bill

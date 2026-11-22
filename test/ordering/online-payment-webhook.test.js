@@ -19,7 +19,7 @@ import Restaurant from "../../src/modules/restaurants/restaurant.model.js";
 import Category from "../../src/modules/categories/category.model.js";
 import { setStripeClient } from "../../src/modules/payouts/stripe.js";
 import { clearPublished, published } from "../../src/realtime/events.js";
-import { createFakeStripe } from "../support/fakeStripe.js";
+import { cardDetails, createFakeStripe } from "../support/fakeStripe.js";
 
 const WEBHOOK_SECRET = "whsec_online_payment_test";
 const STRIPE_ENV = {
@@ -344,4 +344,61 @@ test("the guest polls for the receipt and the webhook never came: Stripe is aske
   // The webhook arriving later replays: still one Payment.
   assert.equal((await completed(place, checkoutSessionId)).status, 200);
   assert.equal((await place.payments()).length, 1);
+});
+
+test("a card payment keeps brand, last 4, funding, wallet, authorization code and the PaymentIntent", async () => {
+  const place = await fixture();
+  const checkoutSessionId = await place.start();
+  stripe.completeCheckoutSession(checkoutSessionId, cardDetails({ brand: "mastercard", last4: "1234", funding: "debit", wallet: "apple_pay" }));
+
+  assert.equal((await completed(place, checkoutSessionId)).status, 200);
+
+  const [payment] = await place.payments();
+  assert.match(payment.online.paymentIntentId, /^pi_/);
+  assert.deepEqual(
+    { ...payment.online, paymentIntentId: undefined },
+    {
+      type: "card",
+      brand: "mastercard",
+      last4: "1234",
+      funding: "debit",
+      wallet: "apple_pay",
+      authorizationCode: "123456",
+      paymentIntentId: undefined,
+      authorizedAt: new Date(1794000000 * 1000),
+    }
+  );
+  const retrieve = stripe.calls.find(([op, , params]) => op === "checkout.sessions.retrieve" && params?.expand);
+  assert.deepEqual(retrieve[2], { expand: ["payment_intent.latest_charge"] });
+  assert.deepEqual(retrieve[3], { stripeAccount: place.restaurant.payoutAccount.stripeAccountId });
+});
+
+test("a payment that is not by card keeps only its type, the PaymentIntent and the time", async () => {
+  const place = await fixture();
+  const checkoutSessionId = await place.start();
+  stripe.completeCheckoutSession(checkoutSessionId, { type: "paypal", paypal: { payer_email: "guest@example.com" } });
+
+  assert.equal((await completed(place, checkoutSessionId)).status, 200);
+
+  const [payment] = await place.payments();
+  assert.deepEqual(Object.keys(payment.online).sort(), ["authorizedAt", "paymentIntentId", "type"]);
+  assert.equal(payment.online.type, "paypal");
+});
+
+test("Stripe failing to give the details still records the payment; a redelivered event fills them in", async () => {
+  const place = await fixture();
+  const checkoutSessionId = await place.start();
+  stripe.completeCheckoutSession(checkoutSessionId);
+  stripe.failNext("checkout.sessions.retrieve");
+
+  assert.equal((await completed(place, checkoutSessionId)).status, 200);
+  let [payment] = await place.payments();
+  assert.equal(payment.method, "ONLINE");
+  assert.equal(payment.online, undefined);
+
+  assert.equal((await completed(place, checkoutSessionId)).status, 200);
+  [payment] = await place.payments();
+  assert.equal((await place.payments()).length, 1);
+  assert.equal(payment.online.type, "card");
+  assert.equal(payment.online.last4, "4242");
 });

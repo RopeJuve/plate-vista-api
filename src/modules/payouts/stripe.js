@@ -163,6 +163,40 @@ export const createOnlinePaymentCheckout = async ({
 export const retrieveOnlinePaymentCheckout = ({ stripeAccountId, checkoutSessionId }) =>
   client().checkout.sessions.retrieve(checkoutSessionId, {}, { stripeAccount: stripeAccountId });
 
+const fromUnix = (seconds) => (Number.isFinite(seconds) ? new Date(seconds * 1000) : undefined);
+
+// What the guest's receipt shows about how they paid, from a Checkout Session
+// whose payment_intent.latest_charge is expanded; null without a charge.
+export const onlinePaymentDetailsOf = (checkout) => {
+  const intent = checkout?.payment_intent;
+  const charge = intent && typeof intent === "object" ? intent.latest_charge : null;
+  const method = charge && typeof charge === "object" ? charge.payment_method_details : null;
+  if (!method?.type) return null;
+  const card = method.type === "card" ? method.card || {} : {};
+  const details = {
+    type: method.type,
+    brand: card.brand,
+    last4: card.last4,
+    funding: card.funding,
+    wallet: card.wallet?.type,
+    authorizationCode: card.authorization_code,
+    paymentIntentId: intent.id,
+    authorizedAt: fromUnix(charge.created),
+  };
+  return Object.fromEntries(Object.entries(details).filter(([, value]) => value != null && value !== ""));
+};
+
+// How the guest paid a Checkout Session on the restaurant's Payout Account
+// (onlinePaymentDetailsOf); null when Stripe has no charge for it.
+export const retrieveOnlinePaymentDetails = async ({ stripeAccountId, checkoutSessionId }) =>
+  onlinePaymentDetailsOf(
+    await client().checkout.sessions.retrieve(
+      checkoutSessionId,
+      { expand: ["payment_intent.latest_charge"] },
+      { stripeAccount: stripeAccountId }
+    )
+  );
+
 // Expires a Checkout Session on the restaurant's Payout Account so the guest
 // can no longer pay it. Returns "expired", or "complete" when the guest has
 // paid it already (Stripe expires only an open one). Any other failure throws.

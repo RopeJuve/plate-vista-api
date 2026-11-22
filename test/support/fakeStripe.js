@@ -9,6 +9,7 @@
 //   fake.failNext("checkout.sessions.create");            // the next such call throws a Stripe error
 //   fake.refundsCreated();                                // refunds Stripe actually made (idempotent replays not counted)
 //   fake.completeCheckoutSession(id);                     // the guest paid: expiring it now fails as Stripe does
+//   fake.completeCheckoutSession(id, { type: "paypal" }); // ... with these payment_method_details (default: a Visa card)
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 class StripeSignatureVerificationError extends Error {
@@ -36,6 +37,20 @@ export const accountState = ({ cardPayments = "restricted", ownerDue = true } = 
         minimum_deadline: { status: "currently_due" },
       }]
       : [],
+  },
+});
+
+// A charge's payment_method_details for a card payment, as Stripe sends them.
+export const cardDetails = ({ brand = "visa", last4 = "4242", funding = "credit", wallet = null, authorizationCode = "123456" } = {}) => ({
+  type: "card",
+  card: {
+    brand,
+    last4,
+    funding,
+    country: "DE",
+    network: brand,
+    wallet: wallet ? { type: wallet } : null,
+    ...(authorizationCode ? { authorization_code: authorizationCode } : {}),
   },
 });
 
@@ -108,8 +123,22 @@ export const createFakeStripe = () => {
     accountsCreated: () => calls.filter(([op]) => op === "v2.core.accounts.create").length,
     checkoutSessionsCreated: () => calls.filter(([op]) => op === "checkout.sessions.create").length,
     refundsCreated: () => refunds.length,
-    completeCheckoutSession(id) {
-      Object.assign(checkouts.get(id), { status: "complete", payment_status: "paid" });
+    completeCheckoutSession(id, paymentMethodDetails = cardDetails()) {
+      const suffix = randomBytes(8).toString("hex");
+      Object.assign(checkouts.get(id), {
+        status: "complete",
+        payment_status: "paid",
+        payment_intent: {
+          id: `pi_${suffix}`,
+          object: "payment_intent",
+          latest_charge: {
+            id: `ch_${suffix}`,
+            object: "charge",
+            created: 1794000000,
+            payment_method_details: paymentMethodDetails,
+          },
+        },
+      });
     },
     failNext(op) {
       failing.add(op);
@@ -186,7 +215,12 @@ export const createFakeStripe = () => {
           calls.push(["checkout.sessions.retrieve", id, params, options]);
           maybeFail("checkout.sessions.retrieve");
           const { stripeAccount, ...session } = checkoutSession(id, options.stripeAccount);
-          return session;
+          // Stripe returns the PaymentIntent's id unless it is expanded.
+          const expanded = params?.expand?.includes("payment_intent.latest_charge");
+          if (session.payment_intent && !expanded) {
+            return { ...session, payment_intent: session.payment_intent.id };
+          }
+          return structuredClone(session);
         },
         // Stripe expires only an open Checkout Session.
         async expire(id, params, options = {}) {
