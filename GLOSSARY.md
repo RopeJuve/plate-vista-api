@@ -78,6 +78,18 @@ _Avoid_: Connect account, Stripe account (in product language)
 The guest's record of a payment: what was bought, VAT per rate, total, payment method, and the TSE signature. Guests open it by link or QR code, without signing in.
 _Avoid_: Invoice, Beleg (in English copy), bill
 
+**Receipt Number**:
+The number that identifies a receipt: the TSE's transaction number for its payment, so it exists only once the payment is signed.
+_Avoid_: Bill number, invoice number
+
+**Service Period**:
+The time a receipt covers: from the bill's first order to its payment.
+_Avoid_: Visit duration, Leistungszeitraum (in English copy)
+
+**Hospitality Section**:
+The part of a receipt a business guest fills in by hand to deduct a meal as entertainment: who was hosted, the occasion, place and date, and a signature.
+_Avoid_: Bewirtungsbeleg (in English copy), expense form
+
 **TSE**:
 The certified signing device German law requires for a till, rented from fiskaly; every order and every payment is signed by the restaurant's TSE.
 _Avoid_: Fiscal printer, Kasse
