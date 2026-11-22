@@ -123,10 +123,21 @@ GET /receipts/:receiptToken -> 200 Receipt | 404
 ```ts
 Receipt = {
   restaurant: { name, legalName, address, taxNumber?, vatId? },
+  receiptNumber: number | null,        // the TSE transaction number (ADR-0007); null until the payment is signed
+  tableNumber?,
+  servicePeriod: { start, end },       // first order not wholly cancelled → paidAt
   lines: [{ title, quantity, unitPriceCents, lineTotalCents, vatRate }],  // merged by item + unit price + VAT rate across the bill (a rate change mid-visit gives two lines, each taxed right)
   totalsByVat: [{ vatRate, netCents, vatCents, grossCents }],
   totalCents,
   method,
+  paymentDetails?: {                   // ONLINE only, kept from Stripe when the payment was recorded; absent if Stripe could not be read
+    type,                              // Stripe's payment method type: card, paypal, klarna, sepa_debit, ...
+    brand?, last4?, funding?,          // cards only (funding: credit | debit | prepaid | unknown)
+    wallet?,                           // apple_pay | google_pay | link | ..., cards only
+    authorizationCode?,                // cards only, when the network gave one
+    transactionId?,                    // the Stripe PaymentIntent id
+    authorizedAt?,
+  },
   paidAt,
   signature: {
     status: SignatureStatus,

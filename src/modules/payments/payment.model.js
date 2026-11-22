@@ -32,6 +32,23 @@ const tseSchema = new Schema(
   { _id: false }
 );
 
+// How the guest paid online, as Stripe saw it, kept when the payment is
+// recorded so the receipt never has to ask Stripe. `type` is Stripe's payment
+// method type (card, paypal, klarna, ...); the card fields only for cards.
+const onlineDetailsSchema = new Schema(
+  {
+    type: { type: String, required: true },
+    brand: { type: String },
+    last4: { type: String },
+    funding: { type: String },
+    wallet: { type: String },
+    authorizationCode: { type: String },
+    paymentIntentId: { type: String },
+    authorizedAt: { type: Date },
+  },
+  { _id: false }
+);
+
 const paymentSchema = new Schema(
   {
     restaurantId: { type: Schema.Types.ObjectId, ref: "Restaurant", required: true },
@@ -44,6 +61,7 @@ const paymentSchema = new Schema(
     clientPaymentId: { type: String, required: true },
     receiptToken: { type: String, required: true, default: newReceiptToken },
     tse: { type: tseSchema, default: () => ({}) },
+    online: { type: onlineDetailsSchema },
   },
   { timestamps: true }
 );

@@ -573,6 +573,7 @@ export const getBillLines = async (restaurantId, sessionId) => {
     .lean();
   return orders.flatMap((order) =>
     linesOnActiveTickets(order.items, ticketsOf(order)).map((line) => ({
+      orderedAt: order.createdAt,
       productId: String(line.productId),
       title: line.title,
       quantity: line.quantity,

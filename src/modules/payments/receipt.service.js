@@ -1,6 +1,7 @@
 import Payment from "./payment.model.js";
 import Restaurant from "../restaurants/restaurant.model.js";
 import TableSession from "../ordering/session.model.js";
+import Table from "../tables/table.model.js";
 import { serializeLegalDetails } from "../restaurants/legal.js";
 import { getBillLines } from "../ordering/order.service.js";
 import { mergeReceiptLines, totalsByVat } from "./money.js";
@@ -44,6 +45,23 @@ const serializeSignature = (tse = {}) => {
   };
 };
 
+// How the guest paid online, when it was kept (ONLINE only, and not for
+// payments recorded before it was).
+const serializeOnline = (online) => {
+  if (!online?.type) return {};
+  const fields = {
+    type: online.type,
+    brand: online.brand,
+    last4: online.last4,
+    funding: online.funding,
+    wallet: online.wallet,
+    authorizationCode: online.authorizationCode,
+    transactionId: online.paymentIntentId,
+    authorizedAt: iso(online.authorizedAt),
+  };
+  return { paymentDetails: Object.fromEntries(Object.entries(fields).filter(([, value]) => value != null)) };
+};
+
 // The lines are rebuilt from the orders on every read, while the total is the
 // one stored on the payment. They agree by construction; if they ever don't,
 // say so loudly rather than hand out a receipt that doesn't add up unnoticed.
@@ -69,17 +87,31 @@ export const getReceipt = async (receiptToken) => {
   }
   const payment = await Payment.findOne({ receiptToken }).setOptions({ skipTenant: true }).lean();
   if (!payment) throw notFound();
-  const restaurant = await Restaurant.findById(payment.restaurantId).select("name legal").lean();
+  const [restaurant, table, billLines] = await Promise.all([
+    Restaurant.findById(payment.restaurantId).select("name legal").lean(),
+    Table.findOne({ _id: payment.tableId, restaurantId: payment.restaurantId })
+      .select("tableNumber")
+      .lean(),
+    getBillLines(payment.restaurantId, payment.sessionId),
+  ]);
   if (!restaurant) throw notFound();
-  const lines = mergeReceiptLines(await getBillLines(payment.restaurantId, payment.sessionId));
+  const lines = mergeReceiptLines(billLines);
+  // Bill lines come in the order they were ordered, so the first is the
+  // Service Period's start; wholly cancelled orders have no lines.
+  const servedFrom = billLines[0]?.orderedAt;
   const totals = totalsByVat(lines);
   warnIfTotalsDrift(payment, totals);
   return {
     restaurant: serializeRestaurant(restaurant),
+    // The Receipt Number is the TSE's transaction number (ADR-0007).
+    receiptNumber: payment.tse?.status === "SIGNED" && payment.tse.txNumber != null ? payment.tse.txNumber : null,
+    ...(table ? { tableNumber: table.tableNumber } : {}),
+    servicePeriod: { start: iso(servedFrom) ?? iso(payment.paidAt), end: iso(payment.paidAt) },
     lines,
     totalsByVat: totals,
     totalCents: payment.amountCents,
     method: payment.method,
+    ...serializeOnline(payment.online),
     paidAt: iso(payment.paidAt),
     signature: serializeSignature(payment.tse),
   };

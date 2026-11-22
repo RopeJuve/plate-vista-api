@@ -3,6 +3,7 @@ process.env.NODE_ENV = "test";
 process.env.DEPLOY_TARGET = "local";
 
 import test from "node:test";
+import mongoose from "mongoose";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { MongoMemoryReplSet } from "mongodb-memory-server";
@@ -10,6 +11,7 @@ import { connectToDatabase, disconnectDatabase } from "../../src/db/db.js";
 import { generateToken, hashPassword } from "../../src/shared/auth.js";
 import { cancelOrder, createOrder } from "../../src/modules/ordering/order.service.js";
 import Payment from "../../src/modules/payments/payment.model.js";
+import Order from "../../src/modules/ordering/order.model.js";
 import MenuItem from "../../src/modules/menu/menuItem.model.js";
 import Table from "../../src/modules/tables/table.model.js";
 import Employee from "../../src/modules/staff/employee.model.js";
@@ -130,6 +132,16 @@ const mixedBill = async (place) => {
   return { sessionId: first.sessionId, payment };
 };
 
+// Without fiskaly credentials the real signing attempt fails in the
+// background; wait for it so it cannot overwrite a signature set by the test.
+const signingAttempted = async (restaurantId, paymentId) => {
+  for (let i = 0; i < 100; i += 1) {
+    const { tse } = await Payment.findOne({ _id: paymentId, restaurantId }).select("tse").lean();
+    if (tse.lastError || tse.status !== "PENDING") return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+};
+
 const getReceipt = (token) => request(app).get(`/api/v1/receipts/${token}`);
 
 const signPayment = (restaurantId, paymentId) =>
@@ -178,11 +190,16 @@ test("a valid token answers the receipt; lines merge across orders and leave out
     "lines",
     "method",
     "paidAt",
+    "receiptNumber",
     "restaurant",
+    "servicePeriod",
     "signature",
+    "tableNumber",
     "totalCents",
     "totalsByVat",
   ]);
+  assert.equal(res.body.receiptNumber, null);
+  assert.equal(res.body.tableNumber, 7);
   assert.deepEqual(res.body.restaurant, {
     name: place.restaurant.name,
     legalName: LEGAL.legalName,
@@ -252,6 +269,69 @@ test("a SIGNED receipt carries the signature fields; FAILED carries only the sta
   );
   const failed = await getReceipt(payment.receiptToken);
   assert.deepEqual(failed.body.signature, { status: "FAILED" });
+});
+
+test("the Receipt Number is the TSE transaction number, once the payment is signed", async () => {
+  const place = await fixture();
+  const { payment } = await mixedBill(place);
+  assert.equal((await getReceipt(payment.receiptToken)).body.receiptNumber, null);
+  await signingAttempted(place.restaurant._id, payment.id);
+  await signPayment(place.restaurant._id, payment.id);
+  assert.equal((await getReceipt(payment.receiptToken)).body.receiptNumber, 42);
+});
+
+test("the Service Period runs from the first order that was not wholly cancelled to the payment", async () => {
+  const place = await fixture();
+  const first = await place.order([[place.beer, 1]]);
+  await cancelOrder(place.ctx, { orderId: first._id, reason: "wrong table", station: "bar" });
+  const second = await place.order([[place.pizza, 1]], first.sessionId);
+  // createdAt is immutable through the model, so set it on the collection.
+  const orderedAt = (order, at) =>
+    Order.collection.updateOne({ _id: new mongoose.Types.ObjectId(order._id) }, { $set: { createdAt: new Date(at) } });
+  await orderedAt(first, "2026-11-09T18:00:00.000Z");
+  await orderedAt(second, "2026-11-09T18:20:00.000Z");
+  const payment = await place.pay(first.sessionId, 1000);
+
+  const res = await getReceipt(payment.receiptToken);
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.deepEqual(res.body.servicePeriod, { start: "2026-11-09T18:20:00.000Z", end: payment.paidAt });
+});
+
+test("an online payment's kept details are on the receipt; a cash payment has none", async () => {
+  const place = await fixture();
+  const { payment } = await mixedBill(place);
+  assert.equal((await getReceipt(payment.receiptToken)).body.paymentDetails, undefined);
+
+  await Payment.updateOne(
+    { _id: payment.id, restaurantId: place.restaurant._id },
+    {
+      $set: {
+        method: "ONLINE",
+        online: {
+          type: "card",
+          brand: "visa",
+          last4: "4242",
+          funding: "credit",
+          wallet: "google_pay",
+          authorizationCode: "654321",
+          paymentIntentId: "pi_123",
+          authorizedAt: new Date("2026-11-09T19:00:00.000Z"),
+        },
+      },
+    }
+  );
+  const res = await getReceipt(payment.receiptToken);
+  assert.equal(res.body.method, "ONLINE");
+  assert.deepEqual(res.body.paymentDetails, {
+    type: "card",
+    brand: "visa",
+    last4: "4242",
+    funding: "credit",
+    wallet: "google_pay",
+    authorizationCode: "654321",
+    transactionId: "pi_123",
+    authorizedAt: "2026-11-09T19:00:00.000Z",
+  });
 });
 
 const FORBIDDEN_KEYS = new Set([
