@@ -93,7 +93,7 @@ POST /sessions/:id/payments
 GET /sessions/:id/bill (existing)  + payment: Payment | null
 GET /sessions/:id/receipt-token    guest of this session (also closed) or staff; 60/min per IP
   -> 200 { receiptToken }            the bill has a Payment (any method)
-  -> 202 { status: 'PAYING' }        session is paying: online payment in progress
+  -> 202 { status: 'PAYING' }        session is paying: online or card reader payment in progress
   -> 404                             no payment and not paying
 GET /staff/board (existing)        sessions[] + payment: Payment | null   (PROTOCOL 2.4)
 ```
@@ -135,7 +135,7 @@ Receipt = {
   totalsByVat: [{ vatRate, netCents, vatCents, grossCents }],
   totalCents,
   method,
-  paymentDetails?: {                   // ONLINE only, kept from Stripe when the payment was recorded; absent if Stripe could not be read
+  paymentDetails?: {                   // ONLINE (below) or CARD_READER (CardPresentDetails, see Card reader payments), kept from Stripe when the payment was recorded; absent if Stripe could not be read
     type,                              // Stripe's payment method type: card, paypal, klarna, sepa_debit, ...
     brand?, last4?, funding?,          // cards only (funding: credit | debit | prepaid | unknown)
     wallet?,                           // apple_pay | google_pay | link | ..., cards only
@@ -199,7 +199,7 @@ GET /sessions/:id/bill (existing)  + canPayOnline: bool
 
 `canPayOnline` is true only when the Payout Account has `chargesEnabled`, `onlinePaymentsEnabled` is on, the TSE is active, the session is `open`, the bill is unpaid with `totalCents > 0`, and Stripe is configured. Guests see nothing else about the Payout Account.
 
-**Frozen bill:** while a guest is paying online the session's `status` is `paying` (see **Bill** in `GLOSSARY.md`). New orders and ticket cancels fail with 409 `BILL_FROZEN`; staff can still move tickets forward.
+**Frozen bill:** while a guest is paying online, or staff take a card reader payment, the session's `status` is `paying` (see **Bill** in `GLOSSARY.md`). New orders and ticket cancels fail with 409 `BILL_FROZEN`; staff can still move tickets forward.
 
 ### Paying online (the session's guest, or staff)
 
