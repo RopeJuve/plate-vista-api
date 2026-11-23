@@ -274,6 +274,14 @@ Staff send a **Bill**'s payment to a **Card Reader**, and the guest taps or inse
 
 Every route here answers 503 `STRIPE_NOT_CONFIGURED` when the server has no Stripe keys. **Test mode** means the server runs with Stripe test keys; only then do **Simulated Readers** exist.
 
+**Stripe setup (manual, once per mode, #91):** the connected-accounts webhook destination that already sends `checkout.session.completed` to `POST /api/v1/webhooks/stripe` (signing secret in `STRIPE_WEBHOOK_SECRET`) must also send these events, in test mode and in live mode:
+
+| Event | Without it |
+|---|---|
+| `payment_intent.amount_capturable_updated` | an authorized card is captured and recorded only when the server asks Stripe (a `receipt-token` poll, a cancel, a staff payment, a close, or expiry) |
+| `payment_intent.payment_failed` | a declined card is not reported; the attempt runs until it expires |
+| `terminal.reader.action_failed` | a reader that fails (offline, timed out, cancelled on the reader) is not reported; the attempt runs until it expires |
+
 ### Shapes
 
 ```ts
