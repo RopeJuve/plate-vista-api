@@ -88,6 +88,10 @@ const restaurantSchema = new Schema(
           detailsSubmitted: { type: Boolean, default: false },
           // The owner's switch; guests can pay online only while it is on.
           onlinePaymentsEnabled: { type: Boolean, default: true },
+          // The Stripe Terminal Location the restaurant's card readers are
+          // registered under, made from the legal address with the first
+          // reader. A Stripe detail, never shown.
+          terminalLocationId: { type: String },
         },
         { _id: false }
       ),

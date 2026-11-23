@@ -36,6 +36,7 @@ import User from "../../src/modules/staff/user.model.js";
 import Restaurant from "../../src/modules/restaurants/restaurant.model.js";
 import Category from "../../src/modules/categories/category.model.js";
 import OnlinePaymentRefund from "../../src/modules/payments/onlinePaymentRefund.model.js";
+import CardReader from "../../src/modules/cardReaders/cardReader.model.js";
 import { registerRestaurant } from "../../src/modules/staff/staff.service.js";
 import { hasCompleteLegalDetails } from "../../src/modules/restaurants/legal.js";
 import { setStripeClient } from "../../src/modules/payouts/stripe.js";
@@ -2321,6 +2322,10 @@ const AUTHENTICATED_ROUTES = [
   "POST /api/v1/restaurant/payout-account",
   "PATCH /api/v1/restaurant/payout-account",
   "GET /api/v1/restaurant/online-payment-refunds",
+  "GET /api/v1/restaurant/card-readers",
+  "POST /api/v1/restaurant/card-readers",
+  "POST /api/v1/restaurant/card-readers/simulated",
+  "DELETE /api/v1/restaurant/card-readers/:id",
   "GET /api/v1/tse",
   "POST /api/v1/tse/setup",
   "GET /api/v1/tse/failed",
@@ -2659,6 +2664,39 @@ test("cross-tenant lists, creates, stats, public menu, and sockets stay inside r
     assert.equal(aSwitch.status, 200, JSON.stringify(aSwitch.body));
     assert.equal((await Restaurant.findById(a.restaurant._id).lean()).payoutAccount.onlinePaymentsEnabled, false);
     assert.notEqual((await Restaurant.findById(b.restaurant._id).lean()).payoutAccount.onlinePaymentsEnabled, false);
+    // Card readers: A neither sees nor removes B's, and A's own Payout
+    // Account (not B's ready one) decides whether A may add one.
+    const bReader = await CardReader.create({
+      restaurantId: b.restaurant._id,
+      stripeAccountId: bStripeAccountId,
+      stripeReaderId: `tmr_b_${tag}`,
+      name: `B reader ${tag}`,
+      deviceType: "stripe_s700",
+      status: "online",
+    });
+    const aReaders = await asOwnerA("get", "/api/v1/restaurant/card-readers");
+    cover("GET", "/api/v1/restaurant/card-readers");
+    assert.equal(aReaders.status, 200, JSON.stringify(aReaders.body));
+    assert.deepEqual(aReaders.body.items, []);
+    assert.equal(aReaders.body.payoutAccountReady, false);
+    const aAddReader = await asOwnerA("post", "/api/v1/restaurant/card-readers").send({
+      registrationCode: stripe.pairingCode(),
+      name: "Sneaky",
+      restaurantId: String(b.restaurant._id),
+    });
+    cover("POST", "/api/v1/restaurant/card-readers");
+    assert.equal(aAddReader.status, 409, JSON.stringify(aAddReader.body));
+    const aAddSimulated = await asOwnerA("post", "/api/v1/restaurant/card-readers/simulated").send({
+      name: "Sneaky",
+      restaurantId: String(b.restaurant._id),
+    });
+    cover("POST", "/api/v1/restaurant/card-readers/simulated");
+    assert.equal(aAddSimulated.status, 409, JSON.stringify(aAddSimulated.body));
+    const aRemoveReader = await asOwnerA("delete", `/api/v1/restaurant/card-readers/${bReader._id}`);
+    cover("DELETE", "/api/v1/restaurant/card-readers/:id");
+    assert.equal(aRemoveReader.status, 404);
+    assert.equal(stripe.calls.some(([op]) => op.startsWith("terminal.")), false);
+    assert.ok(await CardReader.findOne({ _id: bReader._id, restaurantId: b.restaurant._id }));
   } finally {
     setStripeClient(null);
     delete process.env.DASHBOARD_URL;
