@@ -244,7 +244,8 @@ test("the PaymentIntent is card-present on the Payout Account, with manual captu
   assert.ok(options.idempotencyKey, "an idempotency key from the attempt");
   assert.equal(params.amount, 1450);
   assert.equal(params.currency, "eur");
-  assert.deepEqual(params.payment_method_types, ["card_present"]);
+  assert.deepEqual(params.allowed_payment_method_types, ["card_present"]);
+  assert.equal(params.payment_method_types, undefined, "Stripe refuses payment_method_types since API 2026-09-30");
   assert.equal(params.capture_method, "manual");
   // 150 bps of 14.50 € is 21.75 cents, rounded to 22.
   assert.equal(params.application_fee_amount, 22);
@@ -726,7 +727,7 @@ test("a reader Stripe says is busy with something outside Plate Vista is refused
   const p = await place();
   const stripeReaderId = stripeReaderNamed(p, "Bar").id;
   const outside = await fake.paymentIntents.create(
-    { amount: 500, currency: "eur", payment_method_types: ["card_present"], capture_method: "manual" },
+    { amount: 500, currency: "eur", allowed_payment_method_types: ["card_present"], capture_method: "manual" },
     { stripeAccount: p.stripeAccountId }
   );
   await fake.terminal.readers.processPaymentIntent(

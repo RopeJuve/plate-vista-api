@@ -550,6 +550,14 @@ export const createFakeStripe = () => {
       async create(params, options = {}) {
         calls.push(["paymentIntents.create", params, options]);
         maybeFail("paymentIntents.create");
+        // API 2026-09-30: payment_method_types can no longer be passed on create;
+        // allowed_payment_method_types narrows the Dashboard's methods instead.
+        if (params.payment_method_types) {
+          throw invalidRequest("The `payment_method_types` parameter is no longer supported.", {
+            code: "payment_method_types_no_longer_supported",
+            param: "payment_method_types",
+          });
+        }
         return once(options, () => {
           const intent = {
             id: `pi_${randomBytes(12).toString("hex")}`,
@@ -559,7 +567,7 @@ export const createFakeStripe = () => {
             amount_received: 0,
             currency: params.currency,
             capture_method: params.capture_method,
-            payment_method_types: params.payment_method_types,
+            payment_method_types: params.allowed_payment_method_types ?? ["card"],
             application_fee_amount: params.application_fee_amount ?? null,
             metadata: { ...params.metadata },
             status: "requires_payment_method",
