@@ -198,11 +198,18 @@ export const addSimulatedReader = async (restaurantId, input) => {
 };
 
 // Removes the reader at Stripe first; if Stripe fails, it stays here too.
+// A reader taking a bill's payment is refused: staff cancel that first.
 export const removeCardReader = async (restaurantId, id) => {
   assertTerminalConfigured();
   if (!mongoose.isValidObjectId(id)) throw notFound();
   const reader = await CardReader.findOne({ _id: id, restaurantId }).lean();
   if (!reader) throw notFound();
+  const busyWith = (await busyReaders(restaurantId)).get(String(reader._id));
+  if (busyWith) {
+    throw new AppError("CARD_READER_BUSY", "The card reader is taking a payment.", undefined, {
+      tableNumber: busyWith.tableNumber,
+    });
+  }
   try {
     await removeStripeReader({ stripeAccountId: reader.stripeAccountId, stripeReaderId: reader.stripeReaderId });
   } catch (error) {

@@ -157,6 +157,8 @@ const place = async ({ chargesEnabled = true, tse = true, reader = "simulated" }
       };
     },
     bill: (token = waiterToken) => as(token)("get", "/bill"),
+    removeReader: (id = readerId) =>
+      request(app).delete(`/api/v1/restaurant/card-readers/${id}`).set("Authorization", `Bearer ${ownerToken}`),
     guestBill: () => as(guestToken)("get", "/bill"),
     payments: () => Payment.find({ restaurantId: restaurant._id, sessionId }).lean(),
   };
@@ -790,4 +792,24 @@ test("a reader taking a table's payment shows that table, and is not available t
   const withSpare = (await table5.bill()).body.cardReader;
   assert.equal(withSpare.state, "OFFERED");
   assert.equal(withSpare.readers.find((reader) => reader.id === terrasse).busyWith, null);
+});
+
+test("a reader taking a payment cannot be removed; once that payment ends it can", async () => {
+  const p = await place();
+  assert.equal((await p.start()).status, 200);
+
+  const res = await p.removeReader();
+  assert.equal(res.status, 409, JSON.stringify(res.body));
+  assert.deepEqual(res.body, {
+    code: "CARD_READER_BUSY",
+    message: "The card reader is taking a payment.",
+    details: { tableNumber: 4 },
+  });
+  assert.equal(callsOf("terminal.readers.del").length, 0);
+  assert.equal(fake.readersOn(p.stripeAccountId).length, 1);
+  assert.equal((await p.bill()).body.session.status, "paying");
+
+  assert.equal((await p.asWaiter("post", "/card-reader-payment/cancel")).status, 200);
+  assert.equal((await p.removeReader()).status, 204);
+  assert.equal(fake.readersOn(p.stripeAccountId).length, 0);
 });
