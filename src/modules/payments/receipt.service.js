@@ -45,19 +45,19 @@ const serializeSignature = (tse = {}) => {
   };
 };
 
-// How the guest paid online, when it was kept (ONLINE only, and not for
-// payments recorded before it was).
-const serializeOnline = (online) => {
-  if (!online?.type) return {};
+// How the guest paid by card, when it was kept (payments the provider
+// records only, and not for payments recorded before it was).
+const serializeCard = (card) => {
+  if (!card?.type) return {};
   const fields = {
-    type: online.type,
-    brand: online.brand,
-    last4: online.last4,
-    funding: online.funding,
-    wallet: online.wallet,
-    authorizationCode: online.authorizationCode,
-    transactionId: online.paymentIntentId,
-    authorizedAt: iso(online.authorizedAt),
+    type: card.type,
+    brand: card.brand,
+    last4: card.last4,
+    funding: card.funding,
+    wallet: card.wallet,
+    authorizationCode: card.authorizationCode,
+    transactionId: card.paymentIntentId,
+    authorizedAt: iso(card.authorizedAt),
   };
   return { paymentDetails: Object.fromEntries(Object.entries(fields).filter(([, value]) => value != null)) };
 };
@@ -111,7 +111,7 @@ export const getReceipt = async (receiptToken) => {
     totalsByVat: totals,
     totalCents: payment.amountCents,
     method: payment.method,
-    ...serializeOnline(payment.online),
+    ...serializeCard(payment.card),
     paidAt: iso(payment.paidAt),
     signature: serializeSignature(payment.tse),
   };

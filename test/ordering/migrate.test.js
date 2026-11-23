@@ -331,3 +331,44 @@ test("menu price migration turns the float price into cents, drops it, and can r
   assert.deepEqual(second, { dryRun: false, converted: 0, unset: 0 });
   assert.deepEqual(await items.find({}).sort({ _id: 1 }).toArray(), before);
 });
+
+test("card payment migration marks frozen bills as paying online and renames online details to card details, twice safely", async () => {
+  const { migrateCardPayments } = await import("../../src/db/migrateCardPayments.js");
+  const db = mongoose.connection.db;
+  const sessions = db.collection("tablesessions");
+  const payments = db.collection("payments");
+  const restaurantId = new mongoose.Types.ObjectId();
+  const expiresAt = new Date("2026-11-22T12:30:00.000Z");
+  const attempt = { attemptId: "a-1", checkoutSessionId: "cs_1", url: "https://checkout", amountCents: 1450, expiresAt };
+  const frozen = new mongoose.Types.ObjectId();
+  const open = new mongoose.Types.ObjectId();
+  await sessions.insertMany([
+    { _id: frozen, restaurantId, status: "paying", code: "A", onlinePayment: attempt },
+    { _id: open, restaurantId, status: "open", code: "B" },
+  ]);
+  const details = { type: "card", brand: "visa", last4: "4242", paymentIntentId: "pi_1" };
+  const legacy = new mongoose.Types.ObjectId();
+  const cash = new mongoose.Types.ObjectId();
+  await payments.insertMany([
+    { _id: legacy, restaurantId, method: "ONLINE", amountCents: 1450, online: details },
+    { _id: cash, restaurantId, method: "CASH", amountCents: 900 },
+  ]);
+
+  const dry = await migrateCardPayments({ dryRun: true });
+  assert.deepEqual(dry, { dryRun: true, frozenBills: 1, payments: 1 });
+  assert.deepEqual((await sessions.findOne({ _id: frozen })).onlinePayment, attempt);
+
+  const first = await migrateCardPayments();
+  assert.deepEqual(first, { dryRun: false, frozenBills: 1, payments: 1 });
+  const session = await sessions.findOne({ _id: frozen });
+  assert.deepEqual(session.paymentInProgress, { kind: "online", ...attempt });
+  assert.equal("onlinePayment" in session, false);
+  assert.equal("paymentInProgress" in (await sessions.findOne({ _id: open })), false);
+  const payment = await payments.findOne({ _id: legacy });
+  assert.deepEqual(payment.card, details);
+  assert.equal("online" in payment, false);
+  assert.equal("card" in (await payments.findOne({ _id: cash })), false);
+
+  const second = await migrateCardPayments();
+  assert.deepEqual(second, { dryRun: false, frozenBills: 0, payments: 0 });
+});

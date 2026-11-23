@@ -87,7 +87,7 @@ const fixture = async () => {
   const start = async () => {
     const res = await post("/online-payment", guestToken);
     assert.equal(res.status, 200, JSON.stringify(res.body));
-    return (await session()).onlinePayment.checkoutSessionId;
+    return (await session()).paymentInProgress.checkoutSessionId;
   };
   const session = () => TableSession.findOne({ _id: sessionId, restaurantId: restaurant._id }).lean();
   const payments = () => Payment.find({ restaurantId: restaurant._id, sessionId }).lean();
@@ -124,7 +124,7 @@ const assertExpired = (place, checkoutSessionId) => {
 const assertUnfrozen = async (place) => {
   const session = await place.session();
   assert.equal(session.status, "open");
-  assert.equal(session.onlinePayment, undefined);
+  assert.equal(session.paymentInProgress, undefined);
   const unfrozen = eventsNamed("bill.unfrozen");
   assert.equal(unfrozen.length, 1);
   assert.equal(String(unfrozen[0].sessionId), place.sessionId);
@@ -322,7 +322,7 @@ test("closing a frozen table expires the Checkout Session first, then closes", a
   assertExpired(place, checkoutSessionId);
   const session = await place.session();
   assert.equal(session.status, "closed");
-  assert.equal(session.onlinePayment, undefined);
+  assert.equal(session.paymentInProgress, undefined);
   const order = published.map((envelope) => envelope.message?.event).filter(Boolean);
   assert.deepEqual(order, ["bill.unfrozen", "session.closed"]);
 });

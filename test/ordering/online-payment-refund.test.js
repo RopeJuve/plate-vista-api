@@ -82,7 +82,7 @@ const fixture = async () => {
       .set("Authorization", `Bearer ${guestToken}`);
     assert.equal(res.status, 200, JSON.stringify(res.body));
     const session = await TableSession.findOne({ _id: sessionId, restaurantId: restaurant._id }).lean();
-    return session.onlinePayment.checkoutSessionId;
+    return session.paymentInProgress.checkoutSessionId;
   };
   const payCash = () =>
     recordPayment(ctx, sessionId, { method: "CASH", clientPaymentId: randomUUID(), expectedTotalCents: 1450 });

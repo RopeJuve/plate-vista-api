@@ -1,6 +1,9 @@
 import { Schema, model } from "mongoose";
 import { tenantPlugin } from "../../shared/tenantPlugin.js";
 
+// The kinds of payment a bill can be frozen for.
+export const PAYMENT_IN_PROGRESS_KINDS = ["online"];
+
 const sessionSchema = new Schema(
   {
     restaurantId: {
@@ -22,12 +25,15 @@ const sessionSchema = new Schema(
     // Set when an owner or admin closed the table with its bill unpaid.
     unpaidCloseReason: { type: String },
     unpaidClosedBy: { type: Schema.Types.ObjectId, ref: "Employee" },
-    // The online payment a guest started, while the session is `paying`.
-    // `attemptId` names this start, so Stripe sees a retry of the same start
-    // as the same request; Stripe's id and url arrive after the freeze.
-    onlinePayment: {
+    // The payment in progress while the session is `paying` (the bill is
+    // frozen, GLOSSARY.md): its `kind` and that attempt's data. `attemptId`
+    // names this start, so the payment provider sees a retry of the same
+    // start as the same request. For `online`, Stripe's Checkout Session id
+    // and url arrive after the freeze.
+    paymentInProgress: {
       type: new Schema(
         {
+          kind: { type: String, enum: PAYMENT_IN_PROGRESS_KINDS, required: true },
           attemptId: { type: String, required: true },
           checkoutSessionId: { type: String },
           url: { type: String },
