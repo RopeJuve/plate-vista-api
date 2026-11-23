@@ -448,7 +448,8 @@ export const createFakeStripe = () => {
               // for another card and the reader's action fails.
               Object.assign(intent, {
                 status: "requires_payment_method",
-                latest_charge: { id: `ch_${suffix}`, object: "charge", status: "failed" },
+                // Stripe gives the charge as an id unless it is expanded.
+                latest_charge: `ch_${suffix}`,
                 last_payment_error: {
                   type: "card_error",
                   charge: `ch_${suffix}`,

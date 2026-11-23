@@ -129,7 +129,7 @@ const place = async ({ chargesEnabled = true, tse = true, reader = "simulated" }
     asBar: as(barToken),
     asOwner: as(ownerToken),
     asGuest: as(guestToken),
-    start: (body = { expectedTotalCents: 1450 }) => asWaiter("post", "/card-reader-payment", body),
+    start: (body = {}) => asWaiter("post", "/card-reader-payment", { readerId, expectedTotalCents: 1450, ...body }),
     bill: (token = waiterToken) => as(token)("get", "/bill"),
     guestBill: () => as(guestToken)("get", "/bill"),
     payments: () => Payment.find({ restaurantId: restaurant._id, sessionId }).lean(),
