@@ -580,6 +580,32 @@ CardPresentDetails = {
 }
 ```
 
+### Sales by payment method (owner, admin; like the other statistics)
+
+```
+GET /statistics/sales/payment-methods?start_date&end_date   both or neither; by paidAt
+  -> 200 PaymentMethodSales[]          always CASH, CARD, ONLINE, in that order
+  -> 400 { error }                     only one of start_date, end_date, or an invalid date
+
+PaymentMethodSales = {
+  group: 'CASH' | 'CARD' | 'ONLINE',   // CARD = CARD_TERMINAL + CARD_READER
+  count, totalCents,
+  methods: [{ method: PaymentMethod, count, totalCents }],   // the exact methods used in the group; [] when none
+}
+```
+
+```jsonc
+// GET /api/v1/statistics/sales/payment-methods
+[
+  { "group": "CASH", "count": 1, "totalCents": 1000, "methods": [{ "method": "CASH", "count": 1, "totalCents": 1000 }] },
+  { "group": "CARD", "count": 3, "totalCents": 7000, "methods": [
+    { "method": "CARD_TERMINAL", "count": 2, "totalCents": 3000 },
+    { "method": "CARD_READER", "count": 1, "totalCents": 4000 }
+  ] },
+  { "group": "ONLINE", "count": 0, "totalCents": 0, "methods": [] }
+]
+```
+
 ### Errors
 
 | Code | Status | When |

@@ -9,6 +9,7 @@ import { AppError } from "../../shared/errors.js";
 import { toIso as iso } from "../../shared/iso.js";
 import { captureException, logger } from "../../shared/logger.js";
 import { reconcileOnlinePayment } from "./onlinePayment.service.js";
+import { serializePaymentDetails } from "./serialize.js";
 
 const RECEIPT_TOKEN_PATTERN = /^[0-9a-f]{32}$/;
 
@@ -48,18 +49,8 @@ const serializeSignature = (tse = {}) => {
 // How the guest paid by card, when it was kept (payments the provider
 // records only, and not for payments recorded before it was).
 const serializeCard = (card) => {
-  if (!card?.type) return {};
-  const fields = {
-    type: card.type,
-    brand: card.brand,
-    last4: card.last4,
-    funding: card.funding,
-    wallet: card.wallet,
-    authorizationCode: card.authorizationCode,
-    transactionId: card.paymentIntentId,
-    authorizedAt: iso(card.authorizedAt),
-  };
-  return { paymentDetails: Object.fromEntries(Object.entries(fields).filter(([, value]) => value != null)) };
+  const paymentDetails = serializePaymentDetails(card);
+  return paymentDetails ? { paymentDetails } : {};
 };
 
 // The lines are rebuilt from the orders on every read, while the total is the
