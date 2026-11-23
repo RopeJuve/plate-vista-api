@@ -144,8 +144,11 @@ const signingAttempted = async (restaurantId, paymentId) => {
 
 const getReceipt = (token) => request(app).get(`/api/v1/receipts/${token}`);
 
-const signPayment = (restaurantId, paymentId) =>
-  Payment.updateOne(
+// Waits for the payment's own signing attempt first: it fails here (no
+// fiskaly credentials) and would otherwise land after this, as FAILED.
+const signPayment = async (restaurantId, paymentId) => {
+  await signingAttempted(restaurantId, paymentId);
+  return Payment.updateOne(
     { _id: paymentId, restaurantId },
     {
       $set: {
@@ -165,6 +168,7 @@ const signPayment = (restaurantId, paymentId) =>
       },
     }
   );
+};
 
 test.before(async () => {
   replset = await MongoMemoryReplSet.create({ replSet: { count: 1 } });
