@@ -1,13 +1,13 @@
 import mongoose from "mongoose";
-import Payment from "./payment.model.js";
-import TableSession from "../ordering/session.model.js";
+import Payment, { PAYMENT_METHOD } from "./payment.model.js";
+import TableSession, { PAYMENT_IN_PROGRESS_KIND } from "../ordering/session.model.js";
 import Restaurant from "../restaurants/restaurant.model.js";
 import { serializePayment } from "./serialize.js";
 import { recordPaymentSchema } from "./payment.schemas.js";
 import { requestSigning } from "./signing.js";
 import { publishBillPaid } from "./events.js";
-import { unfreezeBill } from "./unfreeze.js";
-import { endCardReaderPayment } from "./cardReaderPaymentEnd.js";
+import { endPaymentInProgress } from "./unfreeze.js";
+import { isCardReaderAttempt, reopenFrozenBill } from "./billFreeze.js";
 import { isTseActive } from "../tse/tse.service.js";
 import { getSessionBill } from "../ordering/order.service.js";
 import { findSession, touchSession } from "../ordering/session.service.js";
@@ -110,8 +110,7 @@ const payBill = async (ctx, sessionId, { method, clientPaymentId, settle }) => {
 export const recordPayment = async (ctx, sessionId, input) => {
   await findSession(ctx.restaurantId, sessionId);
   const payload = parseOrThrow(recordPaymentSchema, input);
-  await unfreezeBill(ctx, sessionId, { evenIfStripeFails: true, reason: "STAFF_PAYMENT" });
-  await endCardReaderPayment(ctx, sessionId, { reason: "STAFF_PAYMENT" });
+  await endPaymentInProgress(ctx, sessionId);
   const { payment, replayed } = await payBill(ctx, sessionId, {
     method: payload.method,
     clientPaymentId: payload.clientPaymentId,
@@ -144,7 +143,7 @@ const latePayment = (reason) =>
 export const recordOnlinePayment = async (ctx, sessionId, checkoutSessionId) => {
   try {
     return await payBill(ctx, sessionId, {
-      method: "ONLINE",
+      method: PAYMENT_METHOD.ONLINE,
       clientPaymentId: checkoutSessionId,
       settle: async (bill, mongoSession) => {
         const session = await TableSession.findOne({ _id: sessionId, restaurantId: ctx.restaurantId })
@@ -155,15 +154,12 @@ export const recordOnlinePayment = async (ctx, sessionId, checkoutSessionId) => 
         const attempt = session.paymentInProgress;
         if (
           session.status !== "paying" ||
-          attempt?.kind !== "online" ||
+          attempt?.kind !== PAYMENT_IN_PROGRESS_KIND.ONLINE ||
           attempt.checkoutSessionId !== checkoutSessionId
         ) {
           throw latePayment("BILL_NOT_FROZEN");
         }
-        await TableSession.updateOne(
-          { _id: sessionId, restaurantId: ctx.restaurantId },
-          { $set: { status: "open" }, $unset: { paymentInProgress: 1 } }
-        ).session(mongoSession);
+        await reopenFrozenBill({ restaurantId: ctx.restaurantId, sessionId, attemptId: attempt.attemptId, mongoSession });
         return attempt.amountCents;
       },
     });
@@ -182,7 +178,7 @@ export const recordOnlinePayment = async (ctx, sessionId, checkoutSessionId) => 
 // NOT_FROZEN_FOR_IT and nothing is captured.
 export const recordCardReaderPayment = (ctx, sessionId, { paymentIntentId, stripeAccountId }) =>
   payBill(ctx, sessionId, {
-    method: "CARD_READER",
+    method: PAYMENT_METHOD.CARD_READER,
     clientPaymentId: paymentIntentId,
     settle: async (bill, mongoSession) => {
       const session = await TableSession.findOne({ _id: sessionId, restaurantId: ctx.restaurantId })
@@ -190,17 +186,10 @@ export const recordCardReaderPayment = (ctx, sessionId, { paymentIntentId, strip
         .session(mongoSession)
         .lean();
       const attempt = session.paymentInProgress;
-      if (
-        session.status !== "paying" ||
-        attempt?.kind !== "card_reader" ||
-        attempt.paymentIntentId !== paymentIntentId
-      ) {
-        throw new AppError("NOT_FROZEN_FOR_IT", "The bill is not frozen for this card reader payment", 409);
+      if (!isCardReaderAttempt(session) || attempt.paymentIntentId !== paymentIntentId) {
+        throw new AppError("NOT_FROZEN_FOR_IT", "The bill is not frozen for this card reader payment");
       }
-      await TableSession.updateOne(
-        { _id: sessionId, restaurantId: ctx.restaurantId },
-        { $set: { status: "open" }, $unset: { paymentInProgress: 1 } }
-      ).session(mongoSession);
+      await reopenFrozenBill({ restaurantId: ctx.restaurantId, sessionId, attemptId: attempt.attemptId, mongoSession });
       await captureCardReaderPayment({ stripeAccountId, paymentIntentId });
       return attempt.amountCents;
     },

@@ -1,7 +1,8 @@
 import mongoose from "mongoose";
 import Restaurant from "../restaurants/restaurant.model.js";
 import TableSession from "../ordering/session.model.js";
-import Table from "../tables/table.model.js";
+import { tableNumbersOf } from "../tables/tableNumbers.js";
+import { CARD_READER_ATTEMPT } from "../payments/billFreeze.js";
 import { AppError } from "../../shared/errors.js";
 import { logger } from "../../shared/logger.js";
 import { parseOrThrow } from "../../shared/validate.js";
@@ -43,26 +44,18 @@ const loadRestaurant = async (restaurantId) => {
   return restaurant;
 };
 
-const byName = { name: 1, createdAt: 1, _id: 1 };
+const BY_NAME = { name: 1, createdAt: 1, _id: 1 };
 const NAME_COLLATION = { locale: "de", strength: 2 };
 
 // The bills whose card reader payment the restaurant's readers are taking
 // now, by reader id: { sessionId, tableNumber }.
-export const busyReaders =async (restaurantId, mongoSession = null) => {
-  const paying = await TableSession.find({
-    restaurantId,
-    status: "paying",
-    "paymentInProgress.kind": "card_reader",
-  })
+export const busyReaders = async (restaurantId, mongoSession = null) => {
+  const paying = await TableSession.find({ restaurantId, ...CARD_READER_ATTEMPT })
     .select("tableId paymentInProgress.readerId")
     .session(mongoSession)
     .lean();
   if (paying.length === 0) return new Map();
-  const tables = await Table.find({ restaurantId, _id: { $in: paying.map((session) => session.tableId) } })
-    .select("tableNumber")
-    .session(mongoSession)
-    .lean();
-  const tableNumbers = new Map(tables.map((table) => [String(table._id), table.tableNumber]));
+  const tableNumbers = await tableNumbersOf(restaurantId, paying.map((session) => session.tableId), mongoSession);
   return new Map(
     paying.map((session) => [
       String(session.paymentInProgress.readerId),
@@ -71,11 +64,19 @@ export const busyReaders =async (restaurantId, mongoSession = null) => {
   );
 };
 
+// How old a reader's status may be when shown (contract: CardReader.status).
+const STATUS_MAX_AGE_MS = 30 * 1000;
+
+const checkedWithin = (reader, maxAgeMs, now) =>
+  Boolean(reader.statusCheckedAt) && now - reader.statusCheckedAt.getTime() <= maxAgeMs;
+
 // The restaurant's readers (stored ones, given) with the status Stripe
-// reports now, which is stored too. If Stripe cannot be read, they keep the
-// last status it reported.
-export const withStripeStatus = async (restaurantId, payoutAccount, readers) => {
+// reports now, which is stored too. With `maxAgeMs`, Stripe is asked only
+// when some reader's stored status is older than that. If Stripe cannot be
+// read, they keep the last status it reported.
+export const withStripeStatus = async (restaurantId, payoutAccount, readers, { maxAgeMs = 0 } = {}) => {
   if (readers.length === 0 || !payoutAccount?.stripeAccountId || !payoutAccount.terminalLocationId) return readers;
+  if (maxAgeMs > 0 && readers.every((reader) => checkedWithin(reader, maxAgeMs, Date.now()))) return readers;
   try {
     const atStripe = new Map(
       (await listStripeReaders({
@@ -83,10 +84,18 @@ export const withStripeStatus = async (restaurantId, payoutAccount, readers) => 
         locationId: payoutAccount.terminalLocationId,
       })).map((reader) => [reader.stripeReaderId, reader.status])
     );
-    const fresh = readers.map((reader) => ({ ...reader, status: atStripe.get(reader.stripeReaderId) ?? "offline" }));
+    const statusCheckedAt = new Date();
+    const fresh = readers.map((reader) => ({
+      ...reader,
+      status: atStripe.get(reader.stripeReaderId) ?? "offline",
+      statusCheckedAt,
+    }));
     await CardReader.bulkWrite(
       fresh.map((reader) => ({
-        updateOne: { filter: { _id: reader._id, restaurantId }, update: { $set: { status: reader.status } } },
+        updateOne: {
+          filter: { _id: reader._id, restaurantId },
+          update: { $set: { status: reader.status, statusCheckedAt } },
+        },
       }))
     );
     return fresh;
@@ -96,15 +105,22 @@ export const withStripeStatus = async (restaurantId, payoutAccount, readers) => 
   }
 };
 
-// Every reader with the status Stripe reports now. If Stripe cannot be read,
-// the last status it reported is shown.
+// The restaurant's readers by name, with the status Stripe reported at most
+// 30 s ago (the last one it reported, when it cannot be read), and the bill
+// each one is taking a payment for (busyReaders).
+export const readersWithStatus = async (restaurantId, payoutAccount) => {
+  const stored = await CardReader.find({ restaurantId }).sort(BY_NAME).collation(NAME_COLLATION).lean();
+  if (stored.length === 0) return { readers: [], busy: new Map() };
+  const readers = await withStripeStatus(restaurantId, payoutAccount, stored, { maxAgeMs: STATUS_MAX_AGE_MS });
+  return { readers, busy: await busyReaders(restaurantId) };
+};
+
+// Every reader, as readersWithStatus gives them.
 export const listCardReaders = async (restaurantId) => {
   assertTerminalConfigured();
   const restaurant = await loadRestaurant(restaurantId);
   const account = restaurant.payoutAccount;
-  const stored = await CardReader.find({ restaurantId }).sort(byName).collation(NAME_COLLATION).lean();
-  const readers = await withStripeStatus(restaurantId, account, stored);
-  const busy = await busyReaders(restaurantId);
+  const { readers, busy } = await readersWithStatus(restaurantId, account);
 
   return {
     items: readers.map((reader) => serializeCardReader(reader, busy.get(String(reader._id)))),
@@ -198,11 +214,18 @@ export const addSimulatedReader = async (restaurantId, input) => {
 };
 
 // Removes the reader at Stripe first; if Stripe fails, it stays here too.
+// A reader taking a bill's payment is refused: staff cancel that first.
 export const removeCardReader = async (restaurantId, id) => {
   assertTerminalConfigured();
   if (!mongoose.isValidObjectId(id)) throw notFound();
   const reader = await CardReader.findOne({ _id: id, restaurantId }).lean();
   if (!reader) throw notFound();
+  const busyWith = (await busyReaders(restaurantId)).get(String(reader._id));
+  if (busyWith) {
+    throw new AppError("CARD_READER_BUSY", "The card reader is taking a payment.", undefined, {
+      tableNumber: busyWith.tableNumber,
+    });
+  }
   try {
     await removeStripeReader({ stripeAccountId: reader.stripeAccountId, stripeReaderId: reader.stripeReaderId });
   } catch (error) {

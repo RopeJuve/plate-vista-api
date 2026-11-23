@@ -16,6 +16,7 @@ import Table from "../../src/modules/tables/table.model.js";
 import Employee from "../../src/modules/staff/employee.model.js";
 import Restaurant from "../../src/modules/restaurants/restaurant.model.js";
 import Category from "../../src/modules/categories/category.model.js";
+import CardReader from "../../src/modules/cardReaders/cardReader.model.js";
 import { setStripeClient } from "../../src/modules/payouts/stripe.js";
 import { clearPublished, published } from "../../src/realtime/events.js";
 import { createFakeStripe } from "../support/fakeStripe.js";
@@ -157,6 +158,8 @@ const place = async ({ chargesEnabled = true, tse = true, reader = "simulated" }
       };
     },
     bill: (token = waiterToken) => as(token)("get", "/bill"),
+    removeReader: (id = readerId) =>
+      request(app).delete(`/api/v1/restaurant/card-readers/${id}`).set("Authorization", `Bearer ${ownerToken}`),
     guestBill: () => as(guestToken)("get", "/bill"),
     payments: () => Payment.find({ restaurantId: restaurant._id, sessionId }).lean(),
   };
@@ -624,6 +627,10 @@ test("a wrongly signed authorization webhook is refused and captures nothing", a
 
 const stripeReaderNamed = (p, name) => fake.readersOn(p.stripeAccountId).find((reader) => reader.label === name);
 
+// Time passes: the status Stripe last gave for the restaurant's readers is now `ms` old.
+const letReaderStatusAge = (p, ms) =>
+  CardReader.updateMany({ restaurantId: p.restaurant._id }, { $set: { statusCheckedAt: new Date(Date.now() - ms) } });
+
 test("starting needs the reader, and a reader of another restaurant is not found; the bill stays open", async () => {
   const p = await place();
   const other = await place();
@@ -679,6 +686,8 @@ test("a reader that goes offline as it is told to collect is refused, and the bi
   assert.equal(bill.freeze, null);
   assert.equal(bill.cardReaderPayment, null);
   assert.equal(eventsNamed("bill.frozen").length, 0);
+  // The PaymentIntent made for it is not left behind at Stripe.
+  assert.equal(fake.paymentIntent(paymentIntentIdOf()).status, "canceled");
 
   fake.setReaderStatus(stripeReaderNamed(p, "Bar").id, "online");
   assert.equal((await p.start()).status, 200);
@@ -735,7 +744,13 @@ test("a reader Stripe says is busy with something outside Plate Vista is refused
   });
   assert.equal((await p.bill()).body.session.status, "open");
   assert.equal(fake.reader(stripeReaderId).action.process_payment_intent.payment_intent, outside.id);
+  assert.equal(fake.reader(stripeReaderId).action.status, "in_progress");
   assert.equal(eventsNamed("bill.frozen").length, 0);
+  // The PaymentIntent made for this bill is not left behind at Stripe.
+  const ours = callsOf("terminal.readers.processPaymentIntent").at(-1)[2].payment_intent;
+  assert.notEqual(ours, outside.id);
+  assert.equal(fake.paymentIntent(ours).status, "canceled");
+  assert.equal(fake.paymentIntent(outside.id).status, "requires_payment_method");
 });
 
 const CARD_READER_KEYS = ["id", "name", "deviceType", "serialNumber", "status", "simulated", "busyWith", "addedAt"];
@@ -758,8 +773,25 @@ test("the pay panel lists the readers with the status Stripe reports now, and of
   );
 
   fake.setReaderStatus(stripeReaderNamed(p, "Terrasse").id, "online");
+  await letReaderStatusAge(p, 31 * 1000);
   const again = (await p.bill()).body.cardReader;
   assert.deepEqual(again.readers.map((reader) => reader.status), ["online", "online"]);
+});
+
+test("the pay panel asks Stripe for reader status at most every 30 s", async () => {
+  const p = await place();
+  assert.deepEqual((await p.bill()).body.cardReader.readers.map((reader) => reader.status), ["online"]);
+  assert.equal(callsOf("terminal.readers.list").length, 1);
+
+  // Read again within 30 s: the status Stripe gave just now is shown.
+  fake.setReaderStatus(stripeReaderNamed(p, "Bar").id, "offline");
+  assert.deepEqual((await p.bill()).body.cardReader.readers.map((reader) => reader.status), ["online"]);
+  assert.deepEqual((await p.bill()).body.cardReader.readers.map((reader) => reader.status), ["online"]);
+  assert.equal(callsOf("terminal.readers.list").length, 1);
+
+  await letReaderStatusAge(p, 31 * 1000);
+  assert.deepEqual((await p.bill()).body.cardReader.readers.map((reader) => reader.status), ["offline"]);
+  assert.equal(callsOf("terminal.readers.list").length, 2);
 });
 
 test("card reader payment is disabled with NO_READER_AVAILABLE when every reader is offline", async () => {
@@ -790,4 +822,24 @@ test("a reader taking a table's payment shows that table, and is not available t
   const withSpare = (await table5.bill()).body.cardReader;
   assert.equal(withSpare.state, "OFFERED");
   assert.equal(withSpare.readers.find((reader) => reader.id === terrasse).busyWith, null);
+});
+
+test("a reader taking a payment cannot be removed; once that payment ends it can", async () => {
+  const p = await place();
+  assert.equal((await p.start()).status, 200);
+
+  const res = await p.removeReader();
+  assert.equal(res.status, 409, JSON.stringify(res.body));
+  assert.deepEqual(res.body, {
+    code: "CARD_READER_BUSY",
+    message: "The card reader is taking a payment.",
+    details: { tableNumber: 4 },
+  });
+  assert.equal(callsOf("terminal.readers.del").length, 0);
+  assert.equal(fake.readersOn(p.stripeAccountId).length, 1);
+  assert.equal((await p.bill()).body.session.status, "paying");
+
+  assert.equal((await p.asWaiter("post", "/card-reader-payment/cancel")).status, 200);
+  assert.equal((await p.removeReader()).status, 204);
+  assert.equal(fake.readersOn(p.stripeAccountId).length, 0);
 });

@@ -2,9 +2,9 @@ import { randomUUID } from "node:crypto";
 import mongoose from "mongoose";
 import { z } from "zod";
 import Restaurant from "../restaurants/restaurant.model.js";
-import TableSession from "../ordering/session.model.js";
+import TableSession, { PAYMENT_IN_PROGRESS_KIND } from "../ordering/session.model.js";
 import CardReader from "../cardReaders/cardReader.model.js";
-import { busyReaders, serializeCardReader, withStripeStatus } from "../cardReaders/cardReader.service.js";
+import { busyReaders, withStripeStatus } from "../cardReaders/cardReader.service.js";
 import { getSessionBill } from "../ordering/order.service.js";
 import { findSession } from "../ordering/session.service.js";
 import { isTseActive } from "../tse/tse.service.js";
@@ -15,14 +15,19 @@ import {
   createCardReaderPaymentIntent,
   isStripeTestMode,
   presentTestCard as presentStripeTestCard,
-  retrieveCardReaderPaymentDetails,
   retrieveCardReaderPaymentIntent,
   TEST_CARD_NUMBERS,
 } from "../payouts/stripe.js";
-import Payment from "./payment.model.js";
 import { applicationFeeCents } from "./onlinePayment.service.js";
-import { recordCardReaderPayment } from "./payment.service.js";
 import { publishBillFrozen } from "./events.js";
+import {
+  BILL_FREEZE_KIND,
+  billFreezeOf,
+  isCardReaderAttempt,
+  reopenFrozenBill,
+  serializeCardReaderPayment,
+} from "./billFreeze.js";
+import { stripeAccountOf } from "./stripeContext.js";
 import { AppError } from "../../shared/errors.js";
 import { parseOrThrow } from "../../shared/validate.js";
 import { captureException, logger } from "../../shared/logger.js";
@@ -46,52 +51,34 @@ const testCardSchema = z.object({
   card: z.enum(Object.keys(TEST_CARD_NUMBERS), { error: `card must be one of ${Object.keys(TEST_CARD_NUMBERS).join(", ")}` }),
 });
 
-const NAME_ORDER = { name: 1, createdAt: 1, _id: 1 };
-const NAME_COLLATION = { locale: "de", strength: 2 };
-
-const isCardReaderAttempt = (session) =>
-  session?.status === "paying" && session.paymentInProgress?.kind === "card_reader";
-
-// The contract's CardReaderPayment for the attempt a bill is frozen for, or
-// for the last one that failed.
-export const serializeCardReaderPayment = (sessionId, attempt) => ({
-  id: String(attempt.cardReaderPaymentId),
-  sessionId: String(sessionId),
-  reader: { id: String(attempt.readerId), name: attempt.readerName, simulated: Boolean(attempt.readerSimulated) },
-  amountCents: attempt.amountCents,
-  status: attempt.failure ? "FAILED" : "IN_PROGRESS",
-  failure: attempt.failure ? { reason: attempt.failure.reason, message: attempt.failure.message } : null,
-  startedAt: attempt.startedAt.toISOString(),
-  expiresAt: attempt.expiresAt.toISOString(),
-});
-
-// The contract's BillFreeze: why the bill is frozen; null unless it is.
-export const billFreezeOf = (session) => {
-  const attempt = session?.paymentInProgress;
-  if (session?.status !== "paying" || !attempt) return null;
-  const cardReader = attempt.kind === "card_reader";
-  return {
-    kind: cardReader ? "CARD_READER" : "ONLINE",
-    readerName: cardReader ? attempt.readerName : null,
-    totalCents: attempt.amountCents,
-    expiresAt: attempt.expiresAt.toISOString(),
-  };
-};
-
 const unavailable = (reason) =>
   new AppError("CARD_READER_PAYMENT_UNAVAILABLE", "Card reader payments are not available.", undefined, { reason });
 
-// The restaurant's reader staff chose.
-const findReader = async (restaurantId, readerId) => {
-  const reader = await CardReader.findOne({ _id: readerId, restaurantId }).lean();
+// One of the restaurant's readers.
+const findReader = async (restaurantId, readerId, mongoSession = null) => {
+  const reader = await CardReader.findOne({ _id: readerId, restaurantId }).session(mongoSession).lean();
   if (!reader) throw new AppError("NOT_FOUND", "Card reader not found");
   return reader;
+};
+
+// The reader with the status Stripe reports now, which is stored too.
+const withStatusNow = async (restaurantId, reader) => {
+  const restaurant = await Restaurant.findById(restaurantId).select("payoutAccount").lean();
+  const [fresh] = await withStripeStatus(restaurantId, restaurant?.payoutAccount, [reader]);
+  return fresh;
 };
 
 const offline = () => new AppError("CARD_READER_OFFLINE", "The card reader is offline.");
 
 const busy = (tableNumber) =>
   new AppError("CARD_READER_BUSY", "The card reader is taking another table's payment.", undefined, { tableNumber });
+
+// The error staff get when Stripe refuses the reader; null for other failures.
+const readerRefusal = (error) => {
+  if (error?.code === "terminal_reader_offline") return offline();
+  if (error?.code === "terminal_reader_busy") return busy(null);
+  return null;
+};
 
 // Freezes the open bill at its total for a card reader payment on this
 // reader, or finds the attempt already running on it. With `retry`, it is
@@ -122,13 +109,13 @@ const freeze = async (ctx, sessionId, expectedTotalCents, { reader, retry = fals
       if (session.status === "paying") {
         const running = session.paymentInProgress;
         // The same start, or a retry another request made just now.
-        const same = retry ? running?.retry : String(running?.readerId) === String(reader._id);
-        if (isCardReaderAttempt(session) && same) {
+        const sameRequest = retry ? running?.retry : String(running?.readerId) === String(reader._id);
+        if (isCardReaderAttempt(session) && sameRequest) {
           return { attempt: running, froze: false };
         }
         const freezeNow = billFreezeOf(session);
         throw new AppError("PAYMENT_IN_PROGRESS", "A payment is already in progress for this bill.", undefined, {
-          kind: freezeNow?.kind ?? "ONLINE",
+          kind: freezeNow?.kind ?? BILL_FREEZE_KIND[PAYMENT_IN_PROGRESS_KIND.ONLINE],
           readerName: freezeNow?.readerName ?? null,
         });
       }
@@ -140,17 +127,12 @@ const freeze = async (ctx, sessionId, expectedTotalCents, { reader, retry = fals
           totalCents: bill.totalCents,
         });
       }
-      if (retry) {
-        reader = await CardReader.findOne({ _id: previous.readerId, restaurantId: ctx.restaurantId })
-          .session(mongoSession)
-          .lean();
-        if (!reader) throw new AppError("NOT_FOUND", "Card reader not found");
-      }
+      if (retry) reader = await findReader(ctx.restaurantId, previous.readerId, mongoSession);
       const busyWith = (await busyReaders(ctx.restaurantId, mongoSession)).get(String(reader._id));
       if (busyWith) throw busy(busyWith.tableNumber);
       if (reader.status !== "online") throw offline();
       const attempt = {
-        kind: "card_reader",
+        kind: PAYMENT_IN_PROGRESS_KIND.CARD_READER,
         attemptId: randomUUID(),
         cardReaderPaymentId: retry ? previous.cardReaderPaymentId : new mongoose.Types.ObjectId(),
         ...(retry ? { retry: true } : {}),
@@ -182,23 +164,13 @@ const freeze = async (ctx, sessionId, expectedTotalCents, { reader, retry = fals
 // Puts the bill back to open, with the failed attempt it showed before,
 // unless something else has moved it on since.
 const unfreeze = (ctx, sessionId, attemptId, previous) =>
-  TableSession.updateOne(
-    { _id: sessionId, restaurantId: ctx.restaurantId, status: "paying", "paymentInProgress.attemptId": attemptId },
-    {
-      $set: { status: "open", ...(previous ? { failedCardReaderPayment: previous } : {}) },
-      $unset: { paymentInProgress: 1 },
-    }
-  );
+  reopenFrozenBill({
+    restaurantId: ctx.restaurantId,
+    sessionId,
+    attemptId,
+    set: previous ? { failedCardReaderPayment: previous } : {},
+  });
 
-const stripeAccountOf = async (restaurantId) => {
-  const restaurant = await Restaurant.findById(restaurantId).select("payoutAccount.stripeAccountId").lean();
-  return restaurant?.payoutAccount?.stripeAccountId;
-};
-
-// Makes the PaymentIntent and tells the reader to collect it. Every Stripe
-// call is keyed by the attempt, so a request that repeats the start, or
-// finishes one that stopped halfway, gets Stripe's one PaymentIntent and
-// one reader request.
 // A retry's earlier PaymentIntent serves again while Stripe still waits for
 // a card on it, for the same amount.
 const stillUsable = async (stripeAccountId, attempt) => {
@@ -209,8 +181,11 @@ const stillUsable = async (stripeAccountId, attempt) => {
   return intent.status === "requires_payment_method" && intent.amountCents === attempt.amountCents;
 };
 
-const sendToReader = async (ctx, sessionId, attempt) => {
-  const stripeAccountId = await stripeAccountOf(ctx.restaurantId);
+// The attempt's PaymentIntent: the one it has, a retry's earlier one that
+// still serves, or a new one. Every Stripe call is keyed by the attempt, so
+// a request that repeats the start, or finishes one that stopped halfway,
+// gets Stripe's one PaymentIntent and one reader request.
+const paymentIntentFor = async (ctx, sessionId, attempt, stripeAccountId) => {
   let paymentIntentId = attempt.paymentIntentId;
   if (!paymentIntentId && attempt.reusablePaymentIntentId && (await stillUsable(stripeAccountId, attempt))) {
     paymentIntentId = attempt.reusablePaymentIntentId;
@@ -232,6 +207,11 @@ const sendToReader = async (ctx, sessionId, attempt) => {
     { _id: sessionId, restaurantId: ctx.restaurantId, "paymentInProgress.attemptId": attempt.attemptId },
     { $set: { "paymentInProgress.paymentIntentId": paymentIntentId } }
   );
+  return paymentIntentId;
+};
+
+// Tells the reader to collect the PaymentIntent.
+const collect = async (ctx, sessionId, attempt, stripeAccountId, paymentIntentId) => {
   await collectOnCardReader({
     stripeAccountId,
     stripeReaderId: attempt.stripeReaderId,
@@ -244,6 +224,19 @@ const sendToReader = async (ctx, sessionId, attempt) => {
   );
 };
 
+// A PaymentIntent no attempt will use any more is cancelled at Stripe, so
+// none is left behind. Best effort: a failure is only logged.
+const cancelLeftBehind = async (ctx, sessionId, stripeAccountId, paymentIntentId) => {
+  try {
+    await cancelCardReaderPaymentIntent({ stripeAccountId, paymentIntentId });
+  } catch (error) {
+    logger.warn(
+      { restaurantId: String(ctx.restaurantId), sessionId: String(sessionId), paymentIntentId, err: error },
+      "cancelling an unused card reader PaymentIntent failed"
+    );
+  }
+};
+
 // Staff send the bill's whole total to a card reader (ADR-0008). The bill
 // freezes first, then Stripe gets the PaymentIntent and the reader asks for
 // the card. Starting again on the same reader while it runs gives the same
@@ -252,10 +245,8 @@ export const startCardReaderPayment = async (ctx, sessionId, input) => {
   await findSession(ctx.restaurantId, sessionId);
   assertTerminalConfigured();
   const { readerId, expectedTotalCents } = parseOrThrow(startSchema, input || {});
-  const reader = await findReader(ctx.restaurantId, readerId);
-  const restaurant = await Restaurant.findById(ctx.restaurantId).select("payoutAccount").lean();
-  const [fresh] = await withStripeStatus(ctx.restaurantId, restaurant?.payoutAccount, [reader]);
-  return takeOnReader(ctx, sessionId, await freeze(ctx, sessionId, expectedTotalCents, { reader: fresh }));
+  const reader = await withStatusNow(ctx.restaurantId, await findReader(ctx.restaurantId, readerId));
+  return takeOnReader(ctx, sessionId, await freeze(ctx, sessionId, expectedTotalCents, { reader }));
 };
 
 // Staff retry the bill's failed card reader attempt (contract: Retry): the
@@ -281,29 +272,38 @@ const refreshFailedAttemptReader = async (ctx, sessionId) => {
   const readerId = session?.failedCardReaderPayment?.readerId;
   if (!readerId) return;
   const reader = await CardReader.findOne({ _id: readerId, restaurantId: ctx.restaurantId }).lean();
-  if (!reader) return;
-  const restaurant = await Restaurant.findById(ctx.restaurantId).select("payoutAccount").lean();
-  await withStripeStatus(ctx.restaurantId, restaurant?.payoutAccount, [reader]);
+  if (reader) await withStatusNow(ctx.restaurantId, reader);
 };
 
+// Sends the attempt to its reader. Only the request that froze the bill
+// unfreezes it on a failure (the other one's request to Stripe may still
+// succeed), and only that one cancels PaymentIntents nobody will use: the
+// one the reader refused, and a retry's earlier one it replaced.
 const takeOnReader = async (ctx, sessionId, { attempt, froze, previous }) => {
   if (!attempt.collecting) {
+    const stripeAccountId = await stripeAccountOf(ctx.restaurantId);
+    let paymentIntentId;
     try {
-      await sendToReader(ctx, sessionId, attempt);
+      paymentIntentId = await paymentIntentFor(ctx, sessionId, attempt, stripeAccountId);
+      await collect(ctx, sessionId, attempt, stripeAccountId, paymentIntentId);
     } catch (error) {
-      // Only the request that froze the bill unfreezes it: the other one's
-      // request to Stripe may still succeed.
       if (froze) await unfreeze(ctx, sessionId, attempt.attemptId, previous);
       // Stripe refuses a reader that is offline, or busy with something we
       // did not start; whatever it is doing is left alone.
-      if (error?.code === "terminal_reader_offline") throw offline();
-      if (error?.code === "terminal_reader_busy") throw busy(null);
+      const refused = readerRefusal(error);
+      if (refused) {
+        if (froze && paymentIntentId) await cancelLeftBehind(ctx, sessionId, stripeAccountId, paymentIntentId);
+        throw refused;
+      }
       logger.error(
         { restaurantId: String(ctx.restaurantId), sessionId: String(sessionId), requestId: ctx.requestId, err: error },
         "starting the card reader payment failed"
       );
       captureException(error);
       throw new AppError("PAYMENT_PROVIDER_ERROR", "The payment provider could not start the card reader payment");
+    }
+    if (froze && previous?.paymentIntentId && previous.paymentIntentId !== paymentIntentId) {
+      await cancelLeftBehind(ctx, sessionId, stripeAccountId, previous.paymentIntentId);
     }
   }
 
@@ -312,7 +312,7 @@ const takeOnReader = async (ctx, sessionId, { attempt, froze, previous }) => {
       restaurantId: ctx.restaurantId,
       sessionId,
       expiresAt: attempt.expiresAt,
-      kind: "CARD_READER",
+      kind: BILL_FREEZE_KIND[PAYMENT_IN_PROGRESS_KIND.CARD_READER],
       readerName: attempt.readerName,
       totalCents: attempt.amountCents,
     });
@@ -354,114 +354,4 @@ export const presentTestCard = async (ctx, sessionId, input) => {
     throw new AppError("PAYMENT_PROVIDER_ERROR", "The payment provider could not present the test card");
   }
   return serializeCardReaderPayment(sessionId, attempt);
-};
-
-// The pay panel's card reader button (staff only): HIDDEN without Stripe,
-// readers or an open bill; DISABLED with the first reason that applies;
-// otherwise OFFERED. The readers come with the status Stripe reports now and
-// the bill each one is taking a payment for.
-export const cardReaderAvailability = async (restaurantId, bill, session) => {
-  const hidden = { state: "HIDDEN", reason: null, readers: [] };
-  if (!process.env.STRIPE_SECRET_KEY || session?.status === "closed") return hidden;
-  const stored = await CardReader.find({ restaurantId }).sort(NAME_ORDER).collation(NAME_COLLATION).lean();
-  if (stored.length === 0) return hidden;
-  const restaurant = await Restaurant.findById(restaurantId).select("payoutAccount tse.setupStep").lean();
-  const readers = await withStripeStatus(restaurantId, restaurant?.payoutAccount, stored);
-  const busy = await busyReaders(restaurantId);
-  const takingAnotherBill = (reader) => {
-    const busyWith = busy.get(String(reader._id));
-    return Boolean(busyWith) && busyWith.sessionId !== String(session?._id);
-  };
-  const canTake = (reader) => reader.status === "online" && !takingAnotherBill(reader);
-  let reason = null;
-  if (!restaurant?.payoutAccount?.chargesEnabled) reason = "PAYOUT_ACCOUNT_NOT_READY";
-  else if (!isTseActive(restaurant)) reason = "TSE_NOT_ACTIVE";
-  else if (bill.payment) reason = "BILL_PAID";
-  else if (!(bill.totalCents > 0)) reason = "BILL_EMPTY";
-  else if (session?.status === "paying") reason = "PAYMENT_IN_PROGRESS";
-  else if (!readers.some(canTake)) reason = "NO_READER_AVAILABLE";
-  return {
-    state: reason ? "DISABLED" : "OFFERED",
-    reason,
-    readers: readers.map((reader) => serializeCardReader(reader, busy.get(String(reader._id)))),
-  };
-};
-
-// What GET /sessions/:id/bill adds for the pay panel: `freeze` for everyone;
-// `cardReader` and `cardReaderPayment` for staff only.
-export const payPanelOf = async (restaurantId, sessionId, bill, { staff }) => {
-  const session = await TableSession.findOne({ _id: sessionId, restaurantId })
-    .select("status paymentInProgress failedCardReaderPayment")
-    .lean();
-  const extra = { freeze: billFreezeOf(session) };
-  if (!staff) return extra;
-  extra.cardReader = await cardReaderAvailability(restaurantId, bill, session);
-  extra.cardReaderPayment = null;
-  if (isCardReaderAttempt(session)) {
-    extra.cardReaderPayment = serializeCardReaderPayment(sessionId, session.paymentInProgress);
-  } else if (session?.status === "open" && !bill.payment && session.failedCardReaderPayment) {
-    // A failed attempt is shown until something else pays or closes the bill.
-    extra.cardReaderPayment = serializeCardReaderPayment(sessionId, session.failedCardReaderPayment);
-  }
-  return extra;
-};
-
-// The bill a card reader PaymentIntent was made for, from the metadata
-// startCardReaderPayment gave it; null when it names none.
-const billOf = (intent) => {
-  const { restaurantId, sessionId } = intent?.metadata || {};
-  if (!mongoose.isValidObjectId(restaurantId) || !mongoose.isValidObjectId(sessionId)) return null;
-  return { restaurantId, sessionId };
-};
-
-const STRIPE_ACTOR = { type: "system", id: "stripe" };
-
-// Stripe's `payment_intent.amount_capturable_updated`: the card was
-// authorized on the reader. While the bill is still frozen for this
-// PaymentIntent, it is captured and recorded as the bill's CARD_READER
-// Payment, through the same path as every Payment. A repeated or late event
-// replays (the PaymentIntent id is the clientPaymentId). An authorization
-// the bill is not frozen for (cancelled, expired, paid another way, closed)
-// is cancelled at Stripe and records nothing: never a Late Payment.
-export const captureCardReaderAuthorization = async (event) => {
-  const intent = event.data?.object;
-  if (!intent?.id || !(intent.payment_method_types || []).includes("card_present")) return;
-  const bill = billOf(intent);
-  const log = { eventId: event.id, paymentIntentId: intent.id, ...bill };
-  if (!bill) {
-    logger.warn(log, "authorized card reader PaymentIntent names no bill; ignored");
-    return;
-  }
-  const ctx = { restaurantId: bill.restaurantId, requestId: event.id, actor: STRIPE_ACTOR };
-  let recorded;
-  try {
-    recorded = await recordCardReaderPayment(ctx, bill.sessionId, { paymentIntentId: intent.id, stripeAccountId: event.account });
-  } catch (error) {
-    if (error?.code === "VALIDATION") {
-      logger.warn({ ...log, err: error }, "card reader authorization names a PaymentIntent used on another bill; ignored");
-      return;
-    }
-    if (!["NOT_FROZEN_FOR_IT", "BILL_PAID", "NOT_FOUND"].includes(error?.code)) throw error;
-    // Released, never captured (ADR-0008): the bill stopped waiting for this
-    // card. A Stripe failure here fails the webhook, so Stripe sends it again.
-    logger.warn({ ...log, err: error }, "card reader authorization for a bill not frozen for it; cancelling it");
-    await cancelCardReaderPaymentIntent({ stripeAccountId: event.account, paymentIntentId: intent.id });
-  }
-  await keepCardPresentDetails(recorded?.payment, event.account, log);
-};
-
-// Keeps what the card receipt needs (brand, last 4, authorization code, AID,
-// application label, read method) on the Payment. Best effort: the payment
-// stands without it, and a redelivered event (which replays the Payment)
-// tries again.
-const keepCardPresentDetails = async (payment, stripeAccountId, log) => {
-  if (!payment || payment.card) return;
-  try {
-    const card = await retrieveCardReaderPaymentDetails({ stripeAccountId, paymentIntentId: payment.clientPaymentId });
-    if (!card) return;
-    await Payment.updateOne({ _id: payment._id, restaurantId: payment.restaurantId }, { $set: { card } });
-  } catch (error) {
-    logger.error({ ...log, err: error }, "reading the card reader payment's card details from Stripe failed");
-    captureException(error);
-  }
 };

@@ -4,7 +4,7 @@ import { logger } from "../../shared/logger.js";
 import { parseOrThrow } from "../../shared/validate.js";
 import { isTseActive } from "../tse/tse.service.js";
 import { completeOnlinePayment, expireOnlinePayment } from "../payments/onlinePayment.service.js";
-import { captureCardReaderAuthorization } from "../payments/cardReaderPayment.service.js";
+import { captureCardReaderAuthorization } from "../payments/cardReaderCapture.service.js";
 import { failCardReaderAttempt } from "../payments/cardReaderFailure.service.js";
 import { updatePayoutAccountSchema } from "./payout.schemas.js";
 import {

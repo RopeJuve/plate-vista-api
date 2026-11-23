@@ -31,6 +31,8 @@ export const ErrorCodes = {
   CARD_READER_NOT_SIMULATED: "CARD_READER_NOT_SIMULATED",
   CARD_READER_BUSY: "CARD_READER_BUSY",
   CARD_READER_OFFLINE: "CARD_READER_OFFLINE",
+  // Internal: the webhook's card reader authorization is not the one the bill is frozen for.
+  NOT_FROZEN_FOR_IT: "NOT_FROZEN_FOR_IT",
   INTERNAL: "INTERNAL",
 };
 
@@ -67,6 +69,7 @@ const STATUS_BY_CODE = {
   CARD_READER_NOT_SIMULATED: 409,
   CARD_READER_BUSY: 409,
   CARD_READER_OFFLINE: 409,
+  NOT_FROZEN_FOR_IT: 409,
   INTERNAL: 500,
 };
 

@@ -386,3 +386,94 @@ test("a card authorized after the payment expired, with Stripe down at expiry, i
   await tapLate(p, stripeReaderId, paymentIntentId);
   await assertNeverCaptured(p, paymentIntentId);
 });
+
+// The card went through on the reader, but Stripe's authorization webhook
+// never arrived (not set up, not forwarded, or still on its way).
+const authorizedWithoutWebhook = async (p) => {
+  const attempt = await started(p);
+  assert.equal((await p.asWaiter("post", "/card-reader-payment/test-card", { card: "APPROVED" })).status, 200);
+  assert.equal(fake.paymentIntent(attempt.paymentIntentId).status, "requires_capture");
+  clearPublished();
+  return attempt;
+};
+
+// Recorded exactly as the webhook would have: captured once, one CARD_READER
+// Payment, bill.paid and no bill.unfrozen; the webhook arriving afterwards replays.
+const assertRecordedWithoutWebhook = async (p, paymentIntentId) => {
+  assert.equal(fake.captures(), 1);
+  assert.equal(fake.paymentIntent(paymentIntentId).status, "succeeded");
+  const payments = await p.payments();
+  assert.deepEqual(
+    payments.map(({ method, amountCents, clientPaymentId }) => ({ method, amountCents, clientPaymentId })),
+    [{ method: "CARD_READER", amountCents: 1450, clientPaymentId: paymentIntentId }]
+  );
+  const ofThisBill = (name) => eventsNamed(name).filter((e) => e.message.data.sessionId === p.sessionId);
+  assert.equal(ofThisBill("bill.paid").length, 1);
+  assert.equal(ofThisBill("bill.unfrozen").length, 0);
+
+  assert.equal((await deliver(authorizedEvent(p, paymentIntentId))).status, 200);
+  assert.equal(fake.captures(), 1);
+  assert.equal((await p.payments()).length, 1);
+};
+
+test("the guest's receipt poll records a card reader payment whose webhook never came", async () => {
+  const p = await place();
+  const { paymentIntentId } = await authorizedWithoutWebhook(p);
+
+  const res = await p.asGuest("get", "/receipt-token");
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  const [payment] = await p.payments();
+  assert.deepEqual(res.body, { receiptToken: payment?.receiptToken });
+  await assertRecordedWithoutWebhook(p, paymentIntentId);
+});
+
+test("while the card has not gone through, the receipt poll answers PAYING and captures nothing", async () => {
+  const p = await place();
+  await started(p);
+
+  const res = await p.asGuest("get", "/receipt-token");
+  assert.equal(res.status, 202, JSON.stringify(res.body));
+  assert.deepEqual(res.body, { status: "PAYING" });
+  assert.equal(fake.captures(), 0);
+  assert.equal((await p.bill()).body.session.status, "paying");
+});
+
+test("cash on a bill whose card went through without the webhook answers BILL_PAID and records the card", async () => {
+  const p = await place();
+  const { paymentIntentId } = await authorizedWithoutWebhook(p);
+
+  const res = await p.pay("CASH");
+  assert.equal(res.status, 409, JSON.stringify(res.body));
+  assert.equal(res.body.code, "BILL_PAID");
+  assert.equal(callsOf("paymentIntents.cancel").length, 0);
+  await assertRecordedWithoutWebhook(p, paymentIntentId);
+});
+
+test("cancelling a card reader payment whose card went through without the webhook answers BILL_PAID and records it", async () => {
+  const p = await place();
+  const { paymentIntentId } = await authorizedWithoutWebhook(p);
+
+  const res = await p.cancel();
+  assert.equal(res.status, 409, JSON.stringify(res.body));
+  assert.equal(res.body.code, "BILL_PAID");
+  assert.equal(callsOf("paymentIntents.cancel").length, 0);
+  await assertRecordedWithoutWebhook(p, paymentIntentId);
+});
+
+test("closing a table whose card went through without the webhook records the card and closes as paid", async () => {
+  const p = await place();
+  const { paymentIntentId } = await authorizedWithoutWebhook(p);
+
+  const res = await p.asWaiter("post", "/close", {});
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(res.body.status, "closed");
+  await assertRecordedWithoutWebhook(p, paymentIntentId);
+});
+
+test("an expiry sweep finding the card went through without the webhook records it instead of releasing it", async () => {
+  const p = await place();
+  const { attempt, paymentIntentId } = await authorizedWithoutWebhook(p);
+
+  await createCardReaderExpirySweep({ now: () => new Date(Date.parse(attempt.expiresAt) + 1) }).runOnce();
+  await assertRecordedWithoutWebhook(p, paymentIntentId);
+});

@@ -130,6 +130,15 @@ const place = async ({ chargesEnabled = true, tse = true, reader = "simulated" }
     asOwner: as(ownerToken),
     asGuest: as(guestToken),
     start: (body = {}) => asWaiter("post", "/card-reader-payment", { readerId, expectedTotalCents: 1450, ...body }),
+    // Another table of the same restaurant, with an open bill of 14.50 €, starting on the "Bar" reader.
+    startAnotherTable: async (tableNumber) => {
+      const other = await Table.create({ restaurantId: restaurant._id, tableNumber, capacity: 2 });
+      const { order: first } = await createOrder(ctx, { clientOrderId: randomUUID(), tableId: String(other._id), items });
+      return request(app)
+        .post(`/api/v1/sessions/${first.sessionId}/card-reader-payment`)
+        .set("Authorization", `Bearer ${waiterToken}`)
+        .send({ readerId, expectedTotalCents: 1450 });
+    },
     bill: (token = waiterToken) => as(token)("get", "/bill"),
     guestBill: () => as(guestToken)("get", "/bill"),
     payments: () => Payment.find({ restaurantId: restaurant._id, sessionId }).lean(),
@@ -433,6 +442,9 @@ test("after the bill changed, retry checks the new total and takes it on a new P
   assert.notEqual(newIntentId, paymentIntentId);
   assert.equal(fake.paymentIntent(newIntentId).amount, 2900);
   assert.equal((await p.bill()).body.freeze.totalCents, 2900);
+  // The earlier PaymentIntent, for the old total, is not left behind at Stripe.
+  assert.equal(fake.paymentIntent(paymentIntentId).status, "canceled");
+  assert.equal(fake.paymentIntent(newIntentId).status, "requires_payment_method");
 });
 
 test("retry makes a new PaymentIntent when Stripe can no longer use the earlier one", async () => {
@@ -481,6 +493,88 @@ test("a failure Stripe reported for the earlier try changes nothing once the ret
   assert.equal((await deliver(first)).status, 200);
   assert.equal(published.length, 0);
   assert.equal((await p.bill()).body.session.status, "paying");
+});
+
+test("a failure for the earlier try dated the same second the retry started changes nothing", async () => {
+  const p = await place();
+  assert.equal((await p.start()).status, 200);
+  await tap(p, "DECLINED");
+  const paymentIntentId = lastPaymentIntentId();
+  const declined = paymentFailedEvent(p, paymentIntentId);
+  const readerFailed = actionFailedEvent(p);
+  assert.equal((await deliver(declined)).status, 200);
+  const retried = await retry(p);
+  assert.equal(retried.status, 200, JSON.stringify(retried.body));
+  assert.equal(lastPaymentIntentId(), paymentIntentId);
+  clearPublished();
+
+  // Stripe dates events to the second: both late events tie with the retry's start.
+  const sameSecond = Math.floor(Date.parse(retried.body.startedAt) / 1000);
+  assert.equal((await deliver({ ...declined, id: `evt_${randomUUID()}`, created: sameSecond })).status, 200);
+  assert.equal((await deliver({ ...readerFailed, created: sameSecond })).status, 200);
+  assert.equal(published.length, 0);
+  const bill = (await p.bill()).body;
+  assert.equal(bill.session.status, "paying");
+  assert.deepEqual(bill.cardReaderPayment, retried.body);
+});
+
+// Refused: the bill ends open, still showing the failed attempt, and nothing froze.
+const assertRetryRefused = async (p, res, failedBefore, body) => {
+  assert.equal(res.status, 409, JSON.stringify(res.body));
+  assert.deepEqual(res.body, body);
+  const bill = (await p.bill()).body;
+  assert.equal(bill.session.status, "open");
+  assert.equal(bill.freeze, null);
+  assert.deepEqual(bill.cardReaderPayment, failedBefore);
+  assert.equal(eventsNamed("bill.frozen").filter((e) => e.message.data.sessionId === p.sessionId).length, 0);
+};
+
+test("retry on a reader now taking another table's payment is refused with that table", async () => {
+  const p = await place();
+  await startAndDecline(p);
+  const failedBefore = (await p.bill()).body.cardReaderPayment;
+  assert.equal((await p.startAnotherTable(5)).status, 200);
+  clearPublished();
+
+  await assertRetryRefused(p, await retry(p), failedBefore, {
+    code: "CARD_READER_BUSY",
+    message: "The card reader is taking another table's payment.",
+    details: { tableNumber: 5 },
+  });
+});
+
+test("retry on a reader Stripe reports offline is refused before the bill freezes", async () => {
+  const p = await place();
+  await startAndDecline(p);
+  const failedBefore = (await p.bill()).body.cardReaderPayment;
+  fake.setReaderStatus(readerOf(p), "offline");
+  clearPublished();
+  const requestsBefore = fake.readerRequests();
+
+  await assertRetryRefused(p, await retry(p), failedBefore, {
+    code: "CARD_READER_OFFLINE",
+    message: "The card reader is offline.",
+  });
+  assert.equal(fake.readerRequests(), requestsBefore);
+});
+
+test("retry on a reader that goes offline as it is told to collect is refused, and the bill ends unfrozen", async () => {
+  const p = await place();
+  await startAndDecline(p);
+  const failedBefore = (await p.bill()).body.cardReaderPayment;
+  // Stripe cannot be asked for the reader's status, so the last known one
+  // (online) lets the retry go ahead; the reader request then finds it offline.
+  fake.setReaderStatus(readerOf(p), "offline");
+  fake.failNext("terminal.readers.list");
+  clearPublished();
+
+  await assertRetryRefused(p, await retry(p), failedBefore, {
+    code: "CARD_READER_OFFLINE",
+    message: "The card reader is offline.",
+  });
+
+  fake.setReaderStatus(readerOf(p), "online");
+  assert.equal((await retry(p)).status, 200);
 });
 
 test("retry is refused without a failed attempt, for guests, and keeps the failed attempt when Stripe fails", async () => {
