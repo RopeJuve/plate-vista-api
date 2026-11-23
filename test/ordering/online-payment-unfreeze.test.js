@@ -121,14 +121,14 @@ const assertExpired = (place, checkoutSessionId) => {
   assert.equal(options.stripeAccount, place.restaurant.payoutAccount.stripeAccountId);
 };
 
-const assertUnfrozen = async (place) => {
+const assertUnfrozen = async (place, reason) => {
   const session = await place.session();
   assert.equal(session.status, "open");
   assert.equal(session.paymentInProgress, undefined);
   const unfrozen = eventsNamed("bill.unfrozen");
   assert.equal(unfrozen.length, 1);
   assert.equal(String(unfrozen[0].sessionId), place.sessionId);
-  assert.deepEqual(unfrozen[0].message.data, { sessionId: place.sessionId });
+  assert.deepEqual(unfrozen[0].message.data, { sessionId: place.sessionId, reason });
 };
 
 const realRequestSigning = signing.requestSigning;
@@ -170,7 +170,7 @@ test("the guest goes back from Stripe: the Checkout Session is expired, the bill
   assert.equal(res.status, 200, JSON.stringify(res.body));
   assert.equal(res.body.status, "open");
   assertExpired(place, checkoutSessionId);
-  await assertUnfrozen(place);
+  await assertUnfrozen(place, "CANCELLED");
 
   await createOrder(place.guestCtx, { clientOrderId: randomUUID(), items: place.items });
 });
@@ -193,7 +193,7 @@ test("owner and admin unfreeze by hand; waiter, bar and kitchen get 403; a guest
     const res = await place.cancel(place.staff[who]);
     assert.equal(res.status, 200, `${who}: ${JSON.stringify(res.body)}`);
     assertExpired(place, checkoutSessionId);
-    await assertUnfrozen(place);
+    await assertUnfrozen(place, "CANCELLED");
   }
 
   const place = await fixture();
@@ -222,7 +222,7 @@ test("cash on a frozen bill expires the Checkout Session, then records the Payme
   assert.equal(payments.length, 1);
   assert.equal(payments[0].method, "CASH");
   assert.equal(payments[0].amountCents, 1450);
-  await assertUnfrozen(place);
+  await assertUnfrozen(place, "STAFF_PAYMENT");
   // Unfrozen before paid.
   const order = published.map((envelope) => envelope.message?.event).filter((name) => name?.startsWith("bill."));
   assert.deepEqual(order, ["bill.unfrozen", "bill.paid"]);
@@ -285,7 +285,7 @@ test("Stripe unreachable during a staff payment: the bill unfreezes and the paym
   const res = await place.pay(place.staff.waiter, { method: "CARD_TERMINAL" });
   assert.equal(res.status, 201, JSON.stringify(res.body));
   assert.equal((await place.payments()).length, 1);
-  await assertUnfrozen(place);
+  await assertUnfrozen(place, "STAFF_PAYMENT");
 });
 
 test("Stripe unreachable when the guest goes back: 502 and the bill stays frozen", async () => {
@@ -309,7 +309,7 @@ test("Stripe unreachable when an owner unfreezes by hand: staff win, the bill op
 
   const res = await place.cancel(place.staff.owner);
   assert.equal(res.status, 200, JSON.stringify(res.body));
-  await assertUnfrozen(place);
+  await assertUnfrozen(place, "CANCELLED");
 });
 
 test("closing a frozen table expires the Checkout Session first, then closes", async () => {
@@ -325,6 +325,7 @@ test("closing a frozen table expires the Checkout Session first, then closes", a
   assert.equal(session.paymentInProgress, undefined);
   const order = published.map((envelope) => envelope.message?.event).filter(Boolean);
   assert.deepEqual(order, ["bill.unfrozen", "session.closed"]);
+  assert.equal(eventsNamed("bill.unfrozen")[0].message.data.reason, "STAFF_PAYMENT");
 });
 
 test("a waiter closing a frozen unpaid table gets 409 BILL_UNPAID and the guest's payment runs on", async () => {

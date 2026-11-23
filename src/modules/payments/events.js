@@ -70,12 +70,13 @@ export const publishBillFrozen = ({ restaurantId, sessionId, expiresAt, kind, re
     }),
   });
 
-// The bill is open again without being paid (PROTOCOL 2.5).
-export const publishBillUnfrozen = ({ restaurantId, sessionId }) =>
+// The bill is open again without being paid (PROTOCOL 2.5, 2.7): `reason` is
+// CANCELLED, EXPIRED, STAFF_PAYMENT or (card readers only) FAILED.
+export const publishBillUnfrozen = ({ restaurantId, sessionId, reason }) =>
   send({
     restaurantId,
     sessionId,
-    message: event("bill.unfrozen", { sessionId: String(sessionId) }),
+    message: event("bill.unfrozen", { sessionId: String(sessionId), reason }),
   });
 
 // A Late Payment was refunded (PROTOCOL 2.5); staff only.

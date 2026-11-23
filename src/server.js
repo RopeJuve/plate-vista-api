@@ -6,6 +6,7 @@ import { loadEnv } from "./config/env.js";
 import { connectToDatabase, disconnectDatabase } from "./db/db.js";
 import { attachWebSocket } from "./realtime/wsServer.js";
 import { createTseSweep } from "./jobs/tseSweep.js";
+import { createCardReaderExpirySweep } from "./jobs/cardReaderExpirySweep.js";
 import { logger } from "./shared/logger.js";
 
 let httpServer;
@@ -14,12 +15,19 @@ let jobs;
 let shuttingDown = false;
 
 // Background jobs run on one server only (ADR-0005): where ENABLE_JOBS=true.
-export const startJobs = (env, { createSweep = createTseSweep } = {}) => {
+export const startJobs = (
+  env,
+  { createSweep = createTseSweep, createCardReaderSweep = createCardReaderExpirySweep } = {}
+) => {
   if (env.ENABLE_JOBS !== "true") return null;
-  const sweep = createSweep();
-  sweep.start();
-  logger.info("TSE signing sweep started");
-  return sweep;
+  const sweeps = [createSweep(), createCardReaderSweep()];
+  for (const sweep of sweeps) sweep.start();
+  logger.info("TSE signing sweep and card reader expiry sweep started");
+  return {
+    stop: async () => {
+      await Promise.all(sweeps.map((sweep) => sweep.stop()));
+    },
+  };
 };
 
 export const start = async () => {

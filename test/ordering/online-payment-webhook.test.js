@@ -290,7 +290,7 @@ test("expired on a frozen bill unfreezes it and publishes bill.unfrozen", async 
   assert.equal(unfrozen.length, 1);
   assert.equal(unfrozen[0].audience, undefined);
   assert.equal(String(unfrozen[0].sessionId), place.sessionId);
-  assert.deepEqual(unfrozen[0].message.data, { sessionId: place.sessionId });
+  assert.deepEqual(unfrozen[0].message.data, { sessionId: place.sessionId, reason: "EXPIRED" });
 
   // The guest can order again.
   await createOrder(place.guestCtx, { clientOrderId: randomUUID(), items: place.items });

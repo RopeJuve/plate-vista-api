@@ -10,6 +10,7 @@ import { findSession } from "../ordering/session.service.js";
 import { isTseActive } from "../tse/tse.service.js";
 import {
   assertTerminalConfigured,
+  cancelCardReaderPaymentIntent,
   collectOnCardReader,
   createCardReaderPaymentIntent,
   isStripeTestMode,
@@ -320,7 +321,8 @@ const STRIPE_ACTOR = { type: "system", id: "stripe" };
 // PaymentIntent, it is captured and recorded as the bill's CARD_READER
 // Payment, through the same path as every Payment. A repeated or late event
 // replays (the PaymentIntent id is the clientPaymentId). An authorization
-// the bill is no longer frozen for is left alone here; #93 releases it.
+// the bill is not frozen for (cancelled, expired, paid another way, closed)
+// is cancelled at Stripe and records nothing: never a Late Payment.
 export const captureCardReaderAuthorization = async (event) => {
   const intent = event.data?.object;
   if (!intent?.id || !(intent.payment_method_types || []).includes("card_present")) return;
@@ -334,10 +336,14 @@ export const captureCardReaderAuthorization = async (event) => {
   try {
     await recordCardReaderPayment(ctx, bill.sessionId, { paymentIntentId: intent.id, stripeAccountId: event.account });
   } catch (error) {
-    if (["NOT_FROZEN_FOR_IT", "BILL_PAID", "NOT_FOUND", "VALIDATION"].includes(error?.code)) {
-      logger.warn({ ...log, err: error }, "card reader authorization for a bill not frozen for it; not captured");
+    if (error?.code === "VALIDATION") {
+      logger.warn({ ...log, err: error }, "card reader authorization names a PaymentIntent used on another bill; ignored");
       return;
     }
-    throw error;
+    if (!["NOT_FROZEN_FOR_IT", "BILL_PAID", "NOT_FOUND"].includes(error?.code)) throw error;
+    // Released, never captured (ADR-0008): the bill stopped waiting for this
+    // card. A Stripe failure here fails the webhook, so Stripe sends it again.
+    logger.warn({ ...log, err: error }, "card reader authorization for a bill not frozen for it; cancelling it");
+    await cancelCardReaderPaymentIntent({ stripeAccountId: event.account, paymentIntentId: intent.id });
   }
 };

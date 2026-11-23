@@ -13,6 +13,7 @@ import { canPayBillOnline } from "../payouts/payout.service.js";
 import { startOnlinePayment } from "../payments/onlinePayment.service.js";
 import { unfreezeBill } from "../payments/unfreeze.js";
 import { payPanelOf, presentTestCard, startCardReaderPayment } from "../payments/cardReaderPayment.service.js";
+import { cancelCardReaderPayment } from "../payments/cardReaderPaymentEnd.js";
 
 const sessionRouter = express.Router();
 
@@ -161,6 +162,19 @@ sessionRouter.post(
   checkId,
   asyncRoute(async (req, res) => {
     res.status(200).json(await startCardReaderPayment(staffCtx(req), req.params.id, req.body));
+  })
+);
+
+// Any staff member cancels the bill's card reader payment: the reader is
+// cleared and the bill unfreezes, even when Stripe cannot be reached.
+sessionRouter.post(
+  "/:id/card-reader-payment/cancel",
+  requireAuth,
+  requireRole("employee"),
+  requireTenant,
+  checkId,
+  asyncRoute(async (req, res) => {
+    res.status(200).json(await cancelCardReaderPayment(staffCtx(req), req.params.id));
   })
 );
 
