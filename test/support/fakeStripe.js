@@ -19,6 +19,8 @@
 //   fake.readerRequests();                               // reader actions Stripe actually started (replays not counted)
 //   fake.captures();                                     // captures Stripe actually made (replays not counted)
 //   fake.reader(id);                                     // a reader as Stripe keeps it now, with its action
+//   fake.failReaderAction(id, { failureCode, failureMessage }); // the reader's action fails (offline, timeout, ...)
+// presentPaymentMethod declines Stripe's declining test card numbers as Stripe does.
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 class StripeSignatureVerificationError extends Error {
@@ -62,6 +64,16 @@ export const cardDetails = ({ brand = "visa", last4 = "4242", funding = "credit"
     ...(authorizationCode ? { authorization_code: authorizationCode } : {}),
   },
 });
+
+// Stripe's declining test cards: the last_payment_error each one gives.
+const DECLINES = {
+  "4000000000000002": { code: "card_declined", declineCode: "generic_decline", message: "Your card was declined." },
+  "4000000000009995": { code: "card_declined", declineCode: "insufficient_funds", message: "Your card has insufficient funds." },
+  "4000000000009987": { code: "card_declined", declineCode: "lost_card", message: "Your card was declined." },
+  "4000000000009979": { code: "card_declined", declineCode: "stolen_card", message: "Your card was declined." },
+  "4000000000000069": { code: "expired_card", message: "Your card has expired." },
+  "4000000000000119": { code: "processing_error", message: "An error occurred while processing your card. Try again in a little bit." },
+};
 
 // Stripe returns configuration and requirements only when they are included.
 const withIncluded = (found, include = []) => ({
@@ -195,6 +207,15 @@ export const createFakeStripe = () => {
       const code = `${randomBytes(2).toString("hex")}-${randomBytes(2).toString("hex")}-${randomBytes(2).toString("hex")}`;
       pairingCodes.set(code, { deviceType, serialNumber });
       return code;
+    },
+    // The reader's action in progress fails without a card being declined
+    // (it lost its connection, timed out, or someone cancelled on it).
+    failReaderAction(id, { failureCode, failureMessage }) {
+      Object.assign(readers.get(id).action, { status: "failed", failure_code: failureCode, failure_message: failureMessage });
+    },
+    // Someone cancelled the PaymentIntent outside Plate Vista.
+    cancelPaymentIntent(id) {
+      intents.get(id).status = "canceled";
     },
     setReaderStatus(id, status) {
       readers.get(id).status = status;
@@ -420,8 +441,32 @@ export const createFakeStripe = () => {
             }
             const intent = intents.get(reader.action.process_payment_intent.payment_intent);
             const suffix = randomBytes(8).toString("hex");
+            const number = String(params.card_present?.number || "4242424242424242");
+            const decline = DECLINES[number];
+            if (decline) {
+              // Stripe declines it: the charge fails, the PaymentIntent waits
+              // for another card and the reader's action fails.
+              Object.assign(intent, {
+                status: "requires_payment_method",
+                latest_charge: { id: `ch_${suffix}`, object: "charge", status: "failed" },
+                last_payment_error: {
+                  type: "card_error",
+                  charge: `ch_${suffix}`,
+                  code: decline.code,
+                  ...(decline.declineCode ? { decline_code: decline.declineCode } : {}),
+                  message: decline.message,
+                },
+              });
+              Object.assign(reader.action, {
+                status: "failed",
+                failure_code: "card_declined",
+                failure_message: decline.message,
+              });
+              return withoutAccount(structuredClone(reader));
+            }
             Object.assign(intent, {
               status: "requires_capture",
+              last_payment_error: null,
               amount_capturable: intent.amount,
               latest_charge: {
                 id: `ch_${suffix}`,

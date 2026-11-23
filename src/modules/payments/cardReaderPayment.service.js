@@ -14,6 +14,7 @@ import {
   createCardReaderPaymentIntent,
   isStripeTestMode,
   presentTestCard as presentStripeTestCard,
+  retrieveCardReaderPaymentIntent,
   TEST_CARD_NUMBERS,
 } from "../payouts/stripe.js";
 import { applicationFeeCents } from "./onlinePayment.service.js";
@@ -37,6 +38,8 @@ const startSchema = z.object({
     .min(0, "expectedTotalCents must be >= 0"),
 });
 
+const retrySchema = startSchema.pick({ expectedTotalCents: true });
+
 const testCardSchema = z.object({
   card: z.enum(Object.keys(TEST_CARD_NUMBERS), { error: `card must be one of ${Object.keys(TEST_CARD_NUMBERS).join(", ")}` }),
 });
@@ -47,14 +50,15 @@ const NAME_COLLATION = { locale: "de", strength: 2 };
 const isCardReaderAttempt = (session) =>
   session?.status === "paying" && session.paymentInProgress?.kind === "card_reader";
 
-// The contract's CardReaderPayment for the attempt a bill is frozen for.
+// The contract's CardReaderPayment for the attempt a bill is frozen for, or
+// for the last one that failed.
 export const serializeCardReaderPayment = (sessionId, attempt) => ({
   id: String(attempt.cardReaderPaymentId),
   sessionId: String(sessionId),
   reader: { id: String(attempt.readerId), name: attempt.readerName, simulated: Boolean(attempt.readerSimulated) },
   amountCents: attempt.amountCents,
-  status: "IN_PROGRESS",
-  failure: null,
+  status: attempt.failure ? "FAILED" : "IN_PROGRESS",
+  failure: attempt.failure ? { reason: attempt.failure.reason, message: attempt.failure.message } : null,
   startedAt: attempt.startedAt.toISOString(),
   expiresAt: attempt.expiresAt.toISOString(),
 });
@@ -86,9 +90,12 @@ const findReader = async (restaurantId, readerId) => {
 };
 
 // Freezes the open bill at its total for a card reader payment on this
-// reader, or finds the attempt already running on it. Returns
-// { attempt, froze }.
-const freeze = async (ctx, sessionId, reader, expectedTotalCents) => {
+// reader, or finds the attempt already running on it. With `retry`, it is
+// the failed attempt's reader, and the attempt keeps its id; its earlier
+// PaymentIntent may be used again while the total is the same. Returns
+// { attempt, froze, previous }, `previous` being the failed attempt this
+// one replaced.
+const freeze = async (ctx, sessionId, expectedTotalCents, { reader, retry = false }) => {
   const mongoSession = await mongoose.startSession();
   try {
     return await mongoSession.withTransaction(async () => {
@@ -104,13 +111,15 @@ const freeze = async (ctx, sessionId, reader, expectedTotalCents) => {
       const bill = await getSessionBill(ctx, sessionId, mongoSession);
       if (bill.payment) throw new AppError("BILL_PAID", "This bill is paid");
       const session = await TableSession.findOne({ _id: sessionId, restaurantId: ctx.restaurantId })
-        .select("status paymentInProgress")
+        .select("status paymentInProgress failedCardReaderPayment")
         .session(mongoSession)
         .lean();
       if (session.status === "closed") throw new AppError("SESSION_CLOSED", "Session is closed");
       if (session.status === "paying") {
         const running = session.paymentInProgress;
-        if (isCardReaderAttempt(session) && String(running.readerId) === String(reader._id)) {
+        // The same start, or a retry another request made just now.
+        const same = retry ? running?.retry : String(running?.readerId) === String(reader._id);
+        if (isCardReaderAttempt(session) && same) {
           return { attempt: running, froze: false };
         }
         const freezeNow = billFreezeOf(session);
@@ -119,16 +128,28 @@ const freeze = async (ctx, sessionId, reader, expectedTotalCents) => {
           readerName: freezeNow?.readerName ?? null,
         });
       }
+      const previous = session.failedCardReaderPayment;
+      if (retry && !previous) throw new AppError("NOT_FOUND", "No failed card reader payment to retry");
       if (bill.totalCents === 0) throw new AppError("BILL_EMPTY", "The bill is empty; close the table instead");
       if (bill.totalCents !== expectedTotalCents) {
         throw new AppError("BILL_CHANGED", "The bill changed; check the new total", undefined, {
           totalCents: bill.totalCents,
         });
       }
+      if (retry) {
+        reader = await CardReader.findOne({ _id: previous.readerId, restaurantId: ctx.restaurantId })
+          .session(mongoSession)
+          .lean();
+        if (!reader) throw new AppError("NOT_FOUND", "Card reader not found");
+      }
       const attempt = {
         kind: "card_reader",
         attemptId: randomUUID(),
-        cardReaderPaymentId: new mongoose.Types.ObjectId(),
+        cardReaderPaymentId: retry ? previous.cardReaderPaymentId : new mongoose.Types.ObjectId(),
+        ...(retry ? { retry: true } : {}),
+        ...(retry && previous.paymentIntentId && previous.amountCents === bill.totalCents
+          ? { reusablePaymentIntentId: previous.paymentIntentId }
+          : {}),
         readerId: reader._id,
         readerName: reader.name,
         readerSimulated: Boolean(reader.simulated),
@@ -141,21 +162,25 @@ const freeze = async (ctx, sessionId, reader, expectedTotalCents) => {
       // conflict, so one of them retries and sees the other.
       const result = await TableSession.updateOne(
         { _id: sessionId, restaurantId: ctx.restaurantId, status: "open" },
-        { $set: { status: "paying", paymentInProgress: attempt } }
+        { $set: { status: "paying", paymentInProgress: attempt }, $unset: { failedCardReaderPayment: 1 } }
       ).session(mongoSession);
       if (result.matchedCount === 0) throw new AppError("BILL_FROZEN", "The bill is frozen");
-      return { attempt, froze: true, stripeAccountId: restaurant.payoutAccount.stripeAccountId };
+      return { attempt, froze: true, previous };
     });
   } finally {
     await mongoSession.endSession();
   }
 };
 
-// Puts the bill back to open, unless something else has moved it on since.
-const unfreeze = (ctx, sessionId, attemptId) =>
+// Puts the bill back to open, with the failed attempt it showed before,
+// unless something else has moved it on since.
+const unfreeze = (ctx, sessionId, attemptId, previous) =>
   TableSession.updateOne(
     { _id: sessionId, restaurantId: ctx.restaurantId, status: "paying", "paymentInProgress.attemptId": attemptId },
-    { $set: { status: "open" }, $unset: { paymentInProgress: 1 } }
+    {
+      $set: { status: "open", ...(previous ? { failedCardReaderPayment: previous } : {}) },
+      $unset: { paymentInProgress: 1 },
+    }
   );
 
 const stripeAccountOf = async (restaurantId) => {
@@ -167,19 +192,35 @@ const stripeAccountOf = async (restaurantId) => {
 // call is keyed by the attempt, so a request that repeats the start, or
 // finishes one that stopped halfway, gets Stripe's one PaymentIntent and
 // one reader request.
+// A retry's earlier PaymentIntent serves again while Stripe still waits for
+// a card on it, for the same amount.
+const stillUsable = async (stripeAccountId, attempt) => {
+  const intent = await retrieveCardReaderPaymentIntent({
+    stripeAccountId,
+    paymentIntentId: attempt.reusablePaymentIntentId,
+  });
+  return intent.status === "requires_payment_method" && intent.amountCents === attempt.amountCents;
+};
+
 const sendToReader = async (ctx, sessionId, attempt) => {
   const stripeAccountId = await stripeAccountOf(ctx.restaurantId);
-  const { paymentIntentId } = await createCardReaderPaymentIntent({
-    stripeAccountId,
-    attemptId: attempt.attemptId,
-    amountCents: attempt.amountCents,
-    applicationFeeCents: applicationFeeCents(attempt.amountCents),
-    metadata: {
-      restaurantId: String(ctx.restaurantId),
-      sessionId: String(sessionId),
+  let paymentIntentId = attempt.paymentIntentId;
+  if (!paymentIntentId && attempt.reusablePaymentIntentId && (await stillUsable(stripeAccountId, attempt))) {
+    paymentIntentId = attempt.reusablePaymentIntentId;
+  }
+  if (!paymentIntentId) {
+    ({ paymentIntentId } = await createCardReaderPaymentIntent({
+      stripeAccountId,
       attemptId: attempt.attemptId,
-    },
-  });
+      amountCents: attempt.amountCents,
+      applicationFeeCents: applicationFeeCents(attempt.amountCents),
+      metadata: {
+        restaurantId: String(ctx.restaurantId),
+        sessionId: String(sessionId),
+        attemptId: attempt.attemptId,
+      },
+    }));
+  }
   await TableSession.updateOne(
     { _id: sessionId, restaurantId: ctx.restaurantId, "paymentInProgress.attemptId": attempt.attemptId },
     { $set: { "paymentInProgress.paymentIntentId": paymentIntentId } }
@@ -205,8 +246,22 @@ export const startCardReaderPayment = async (ctx, sessionId, input) => {
   assertTerminalConfigured();
   const { readerId, expectedTotalCents } = parseOrThrow(startSchema, input || {});
   const reader = await findReader(ctx.restaurantId, readerId);
-  const { attempt, froze } = await freeze(ctx, sessionId, reader, expectedTotalCents);
+  return takeOnReader(ctx, sessionId, await freeze(ctx, sessionId, expectedTotalCents, { reader }));
+};
 
+// Staff retry the bill's failed card reader attempt (contract: Retry): the
+// bill freezes again at its current total and goes to the same reader, as
+// the same CardReaderPayment. The earlier PaymentIntent is used again when
+// the total is unchanged and Stripe can still take a card on it; otherwise
+// a new one is made. Retries racing each other give one reader request.
+export const retryCardReaderPayment = async (ctx, sessionId, input) => {
+  await findSession(ctx.restaurantId, sessionId);
+  assertTerminalConfigured();
+  const { expectedTotalCents } = parseOrThrow(retrySchema, input || {});
+  return takeOnReader(ctx, sessionId, await freeze(ctx, sessionId, expectedTotalCents, { retry: true }));
+};
+
+const takeOnReader = async (ctx, sessionId, { attempt, froze, previous }) => {
   if (!attempt.collecting) {
     try {
       await sendToReader(ctx, sessionId, attempt);
@@ -218,7 +273,7 @@ export const startCardReaderPayment = async (ctx, sessionId, input) => {
       captureException(error);
       // Only the request that froze the bill unfreezes it: the other one's
       // request to Stripe may still succeed.
-      if (froze) await unfreeze(ctx, sessionId, attempt.attemptId);
+      if (froze) await unfreeze(ctx, sessionId, attempt.attemptId, previous);
       throw new AppError("PAYMENT_PROVIDER_ERROR", "The payment provider could not start the card reader payment");
     }
   }
@@ -294,14 +349,18 @@ export const cardReaderAvailability = async (restaurantId, bill, session) => {
 // `cardReader` and `cardReaderPayment` for staff only.
 export const payPanelOf = async (restaurantId, sessionId, bill, { staff }) => {
   const session = await TableSession.findOne({ _id: sessionId, restaurantId })
-    .select("status paymentInProgress")
+    .select("status paymentInProgress failedCardReaderPayment")
     .lean();
   const extra = { freeze: billFreezeOf(session) };
   if (!staff) return extra;
   extra.cardReader = await cardReaderAvailability(restaurantId, bill, session);
-  extra.cardReaderPayment = isCardReaderAttempt(session)
-    ? serializeCardReaderPayment(sessionId, session.paymentInProgress)
-    : null;
+  extra.cardReaderPayment = null;
+  if (isCardReaderAttempt(session)) {
+    extra.cardReaderPayment = serializeCardReaderPayment(sessionId, session.paymentInProgress);
+  } else if (session?.status === "open" && !bill.payment && session.failedCardReaderPayment) {
+    // A failed attempt is shown until something else pays or closes the bill.
+    extra.cardReaderPayment = serializeCardReaderPayment(sessionId, session.failedCardReaderPayment);
+  }
   return extra;
 };
 

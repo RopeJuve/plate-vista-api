@@ -4,6 +4,27 @@ import { tenantPlugin } from "../../shared/tenantPlugin.js";
 // The kinds of payment a bill can be frozen for.
 export const PAYMENT_IN_PROGRESS_KINDS = ["online", "card_reader"];
 
+// One attempt to take the bill's payment; see paymentInProgress below.
+const attemptFields = {
+  kind: { type: String, enum: PAYMENT_IN_PROGRESS_KINDS, required: true },
+  attemptId: { type: String, required: true },
+  checkoutSessionId: { type: String },
+  url: { type: String },
+  cardReaderPaymentId: { type: Schema.Types.ObjectId },
+  readerId: { type: Schema.Types.ObjectId, ref: "CardReader" },
+  readerName: { type: String },
+  readerSimulated: { type: Boolean },
+  stripeReaderId: { type: String },
+  paymentIntentId: { type: String },
+  // A retry's earlier PaymentIntent, used again while Stripe still can.
+  reusablePaymentIntentId: { type: String },
+  retry: { type: Boolean },
+  collecting: { type: Boolean },
+  amountCents: { type: Number, required: true },
+  startedAt: { type: Date },
+  expiresAt: { type: Date, required: true },
+};
+
 const sessionSchema = new Schema(
   {
     restaurantId: {
@@ -32,24 +53,24 @@ const sessionSchema = new Schema(
     // and url arrive after the freeze. For `card_reader`, the reader it was
     // sent to (with its name as it was then), our id for the attempt (the
     // contract's CardReaderPayment id), and Stripe's PaymentIntent id, which
-    // arrives after the freeze; `collecting` once the reader was told.
+    // arrives after the freeze; `collecting` once the reader was told. A
+    // retry keeps the CardReaderPayment id and gets a new attemptId.
     paymentInProgress: {
+      type: new Schema(attemptFields, { _id: false }),
+      default: undefined,
+    },
+    // The last card reader attempt that failed (declined, or the reader
+    // failed), kept on the open bill with why, so staff can see it and
+    // retry. A retry or a new start takes its place.
+    failedCardReaderPayment: {
       type: new Schema(
         {
-          kind: { type: String, enum: PAYMENT_IN_PROGRESS_KINDS, required: true },
-          attemptId: { type: String, required: true },
-          checkoutSessionId: { type: String },
-          url: { type: String },
-          cardReaderPaymentId: { type: Schema.Types.ObjectId },
-          readerId: { type: Schema.Types.ObjectId, ref: "CardReader" },
-          readerName: { type: String },
-          readerSimulated: { type: Boolean },
-          stripeReaderId: { type: String },
-          paymentIntentId: { type: String },
-          collecting: { type: Boolean },
-          amountCents: { type: Number, required: true },
-          startedAt: { type: Date },
-          expiresAt: { type: Date, required: true },
+          ...attemptFields,
+          failure: {
+            reason: { type: String, required: true },
+            message: { type: String, required: true },
+          },
+          failedAt: { type: Date, required: true },
         },
         { _id: false }
       ),
