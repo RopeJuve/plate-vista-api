@@ -99,7 +99,7 @@ const place = async () => {
     return body === undefined ? req : req.send(body);
   };
   const asOwner = (method, path) => request(app)[method](`/api/v1${path}`).set("Authorization", `Bearer ${ownerToken}`);
-  return { restaurant, stripeAccountId, openBill, asWaiter, asOwner };
+  return { restaurant, stripeAccountId, readerId: reader.body.id, openBill, asWaiter, asOwner };
 };
 
 const callsOf = (op) => fake.calls.filter(([name]) => name === op);
@@ -127,7 +127,7 @@ const deliver = (event) => {
 // Starts a card reader payment for the bill and taps the approved test card;
 // returns the authorized PaymentIntent's id.
 const tapCard = async (p, sessionId, totalCents) => {
-  const started = await p.asWaiter("post", `/sessions/${sessionId}/card-reader-payment`, { expectedTotalCents: totalCents });
+  const started = await p.asWaiter("post", `/sessions/${sessionId}/card-reader-payment`, { readerId: p.readerId, expectedTotalCents: totalCents });
   assert.equal(started.status, 200, JSON.stringify(started.body));
   const tapped = await p.asWaiter("post", `/sessions/${sessionId}/card-reader-payment/test-card`, { card: "APPROVED" });
   assert.equal(tapped.status, 200, JSON.stringify(tapped.body));
