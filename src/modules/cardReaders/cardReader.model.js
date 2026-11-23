@@ -15,6 +15,8 @@ const cardReaderSchema = new Schema(
     simulated: { type: Boolean, default: false },
     // As Stripe last reported it; shown when Stripe cannot be read.
     status: { type: String, enum: ["online", "offline"], default: "offline" },
+    // When Stripe last reported the status; unset until it first does.
+    statusCheckedAt: { type: Date },
   },
   { timestamps: true }
 );

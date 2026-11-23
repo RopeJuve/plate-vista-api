@@ -6,6 +6,15 @@ This release is **2.6**. Clients connect with `/ws?v=2`. A missing `v` defaults 
 
 ## Changelog
 
+### 2.7 (being built, #92–#96)
+
+- Card reader payments (see [`docs/payments-contract.md`](../../docs/payments-contract.md) → Card reader payments). Each ticket adds its part here; the release line moves to 2.7 when the last one lands.
+- `bill.frozen` gains `kind` (`ONLINE` | `CARD_READER`), `readerName` (`null` for `ONLINE`) and `totalCents`, for online payments too. It is sent when staff start a card reader payment, to the staff room and the session's room.
+- `bill.paid` can carry `method: "CARD_READER"`: Stripe's webhook captured the card and recorded the Payment. The bill is never unfrozen in between.
+- `GET /sessions/:id/bill` has `freeze` (everyone) and `cardReader`, `cardReaderPayment` (staff only).
+- A declined card or a failed reader ends the attempt: `bill.paymentFailed` (staff room only, with `reason` and a staff-readable `message`), then `bill.unfrozen` with `reason: "FAILED"`. `cardReaderPayment` stays on the bill as `FAILED` until a retry or a new start. `POST /sessions/:id/card-reader-payment/retry` freezes the bill again on the same reader.
+- `bill.unfrozen` gains `reason`, for online payments too: `CANCELLED` (staff cancelled the card reader payment, the guest went back from Stripe, or an owner/admin unfroze by hand), `EXPIRED` (no card within 3 min, or the Checkout Session expired), `STAFF_PAYMENT` (staff recorded cash or Card Terminal, or closed the table). `FAILED` (card readers only): a declined card or a failed reader, as above.
+
 ### 2.6
 
 - Call waiter. A guest sends `waiter.call`; staff close it with `waiter.dismiss`. New events to the staff room and the session's room: `waiter.called` and `waiter.dismissed`. Open calls are kept in the socket server's memory only (no database): a socket that connects while one is open receives `waiter.called` for it right after it joins, and a server restart forgets them. Closing the session ends its call.
@@ -257,17 +266,20 @@ An unknown `type` is `VALIDATION`. The 11th message within 10 seconds is `RATE_L
 { "type": "event", "event": "order.statusChanged", "data": { "orderId": "...", "status": "pending", "rev": 2, "tickets": [], "totalCents": 1800, "station": "bar" } }
 { "type": "event", "event": "session.closed", "data": { "sessionId": "...", "tableId": "..." } }
 { "type": "event", "event": "menu.updated", "data": { "_id": "...", "title": "...", "priceCents": 450, "inStock": true, "category": "food", "archived": false } }
-{ "type": "event", "event": "bill.paid", "data": { "sessionId": "...", "paymentId": "...", "receiptToken": "...", "method": "CASH|CARD_TERMINAL|ONLINE", "totalCents": 1800 } }
+{ "type": "event", "event": "bill.paid", "data": { "sessionId": "...", "paymentId": "...", "receiptToken": "...", "method": "CASH|CARD_TERMINAL|ONLINE|CARD_READER", "totalCents": 1800 } }
 { "type": "event", "event": "payment.signed", "data": { "paymentId": "...", "receiptToken": "..." } }
 { "type": "event", "event": "payment.signFailed", "data": { "paymentId": "..." } }
-{ "type": "event", "event": "bill.frozen", "data": { "sessionId": "...", "expiresAt": "ISO-8601" } }
-{ "type": "event", "event": "bill.unfrozen", "data": { "sessionId": "..." } }
+{ "type": "event", "event": "bill.frozen", "data": { "sessionId": "...", "expiresAt": "ISO-8601", "kind": "ONLINE|CARD_READER", "readerName": "Bar|null", "totalCents": 1800 } }
+{ "type": "event", "event": "bill.unfrozen", "data": { "sessionId": "...", "reason": "CANCELLED|EXPIRED|STAFF_PAYMENT|FAILED" } }
+{ "type": "event", "event": "bill.paymentFailed", "data": { "sessionId": "...", "tableNumber": 4, "readerName": "Bar", "amountCents": 1800, "reason": "DECLINED|INSUFFICIENT_FUNDS|LOST_OR_STOLEN_CARD|EXPIRED_CARD|PROCESSING_ERROR|CANCELLED_ON_READER|READER_OFFLINE|OTHER", "message": "The card was declined.", "failedAt": "ISO-8601" } }
 { "type": "event", "event": "waiter.called", "data": { "sessionId": "...", "tableId": "...", "tableNumber": 7, "calledAt": "ISO-8601" } }
 { "type": "event", "event": "waiter.dismissed", "data": { "sessionId": "..." } }
 { "type": "event", "event": "online_payment.refunded", "data": { "refund": { "id": "...", "sessionId": "...", "tableNumber": 1, "amountCents": 1800, "reason": "BILL_ALREADY_PAID|BILL_NOT_FROZEN|SESSION_CLOSED", "refundedAt": "ISO-8601" } } }
 ```
 
 `bill.frozen` (2.5) is sent when a guest starts paying online: the session is `paying`, and orders and cancels fail with `BILL_FROZEN` until `bill.unfrozen` (2.5: the guest went back, the payment expired, or staff unfroze it) or `bill.paid` with `method: "ONLINE"`. After `bill.paid` the session is `open` again and the bill is paid. Both go to the staff room and the session's room. `online_payment.refunded` (2.5) goes to the staff room only, when a Late Payment was refunded.
+
+From 2.7 staff also freeze the bill for a card reader payment: `bill.frozen` has `kind: "CARD_READER"` and the reader's `readerName`, and it ends with `bill.paid` (`method: "CARD_READER"`) or `bill.unfrozen`. `bill.unfrozen` carries `reason` for both kinds: `CANCELLED`, `EXPIRED`, `STAFF_PAYMENT`, or (card readers only) `FAILED`. `bill.paymentFailed` (2.7) goes to the staff room only, when the card was declined or the reader failed; `bill.unfrozen` with reason `FAILED` always follows it.
 
 `bill.paid` (2.3) is sent when staff record a payment; the bill takes no more orders or cancellations after it. `payment.signed` (2.3) is sent when the TSE has signed that payment, so the receipt at `GET /api/v1/receipts/:receiptToken` now shows the signature. Both go to the staff room and the session's room. `payment.signFailed` (2.3) goes to the staff room only, when signing the payment failed; owners and admins can retry it through `/api/v1/tse/failed`. Payloads and the REST side are in [`docs/payments-contract.md`](../../docs/payments-contract.md).
 

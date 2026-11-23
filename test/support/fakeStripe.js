@@ -7,6 +7,7 @@
 //   fake.signedEvent(event, secret);                      // { body, signature }
 //   fake.calls;                                           // [["v2.core.accounts.create", params, options], ...]
 //   fake.failNext("checkout.sessions.create");            // the next such call throws a Stripe error
+//   fake.setDown(true);                                   // every call throws a Stripe error until setDown(false)
 //   fake.refundsCreated();                                // refunds Stripe actually made (idempotent replays not counted)
 //   fake.completeCheckoutSession(id);                     // the guest paid: expiring it now fails as Stripe does
 //   fake.completeCheckoutSession(id, { type: "paypal" }); // ... with these payment_method_details (default: a Visa card)
@@ -14,6 +15,14 @@
 //   fake.setReaderStatus(readerId, "offline");           // what the reader reports to Stripe now
 //   fake.readersOn(stripeAccount);                       // readers Stripe has registered on that account
 //   fake.locationsOn(stripeAccount);                     // Terminal Locations on that account
+//   fake.paymentIntent(id);                              // a PaymentIntent as Stripe keeps it now (for webhook events; latest_charge is an id)
+//   fake.charge(id);                                     // a charge as Stripe keeps it now
+//   fake.paymentIntentsCreated();                        // PaymentIntents Stripe actually made (replays not counted)
+//   fake.readerRequests();                               // reader actions Stripe actually started (replays not counted)
+//   fake.captures();                                     // captures Stripe actually made (replays not counted)
+//   fake.reader(id);                                     // a reader as Stripe keeps it now, with its action
+//   fake.failReaderAction(id, { failureCode, failureMessage }); // the reader's action fails (offline, timeout, ...)
+// presentPaymentMethod declines Stripe's declining test card numbers as Stripe does.
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 class StripeSignatureVerificationError extends Error {
@@ -58,6 +67,16 @@ export const cardDetails = ({ brand = "visa", last4 = "4242", funding = "credit"
   },
 });
 
+// Stripe's declining test cards: the last_payment_error each one gives.
+const DECLINES = {
+  "4000000000000002": { code: "card_declined", declineCode: "generic_decline", message: "Your card was declined." },
+  "4000000000009995": { code: "card_declined", declineCode: "insufficient_funds", message: "Your card has insufficient funds." },
+  "4000000000009987": { code: "card_declined", declineCode: "lost_card", message: "Your card was declined." },
+  "4000000000009979": { code: "card_declined", declineCode: "stolen_card", message: "Your card was declined." },
+  "4000000000000069": { code: "expired_card", message: "Your card has expired." },
+  "4000000000000119": { code: "processing_error", message: "An error occurred while processing your card. Try again in a little bit." },
+};
+
 // Stripe returns configuration and requirements only when they are included.
 const withIncluded = (found, include = []) => ({
   ...found,
@@ -95,6 +114,22 @@ export const createFakeStripe = () => {
   const locations = new Map();
   const readers = new Map();
   const pairingCodes = new Map();
+  // Card-present PaymentIntents by id, and what Stripe actually did (an
+  // idempotent replay is not counted).
+  const intents = new Map();
+  let intentsCreated = 0;
+  let readerRequests = 0;
+  let captures = 0;
+
+  // Runs `make` once per idempotency key on that account; a repeat gets the
+  // first response back without running it again.
+  const once = (options, make) => {
+    const key = options.idempotencyKey && `${options.stripeAccount}|${options.idempotencyKey}`;
+    if (key && idempotent.has(key)) return structuredClone(idempotent.get(key));
+    const result = make();
+    if (key) idempotent.set(key, structuredClone(result));
+    return result;
+  };
 
   const invalidRequest = (message, { param, code, statusCode = 400 } = {}) => {
     const error = new Error(message);
@@ -113,9 +148,18 @@ export const createFakeStripe = () => {
     return found;
   };
   const withoutAccount = ({ stripeAccount, ...object }) => ({ ...object });
+  // Stripe sends a PaymentIntent's latest_charge as its id unless it is expanded.
+  const unexpanded = (intent, params) => {
+    const copy = withoutAccount(structuredClone(intent));
+    if (copy.latest_charge && !params?.expand?.includes("latest_charge")) copy.latest_charge = copy.latest_charge.id;
+    return copy;
+  };
+
+  // While Stripe is down, every call fails.
+  let down = false;
 
   const maybeFail = (op) => {
-    if (!failing.delete(op)) return;
+    if (!down && !failing.delete(op)) return;
     const error = new Error("Something went wrong on Stripe's end");
     error.type = "StripeAPIError";
     error.statusCode = 500;
@@ -170,14 +214,35 @@ export const createFakeStripe = () => {
     failNext(op) {
       failing.add(op);
     },
+    setDown(isDown) {
+      down = isDown;
+    },
     pairingCode({ deviceType = "stripe_s700", serialNumber = `STRM${randomBytes(5).toString("hex").toUpperCase()}` } = {}) {
       const code = `${randomBytes(2).toString("hex")}-${randomBytes(2).toString("hex")}-${randomBytes(2).toString("hex")}`;
       pairingCodes.set(code, { deviceType, serialNumber });
       return code;
     },
+    // The reader's action in progress fails without a card being declined
+    // (it lost its connection, timed out, or someone cancelled on it).
+    failReaderAction(id, { failureCode, failureMessage }) {
+      Object.assign(readers.get(id).action, { status: "failed", failure_code: failureCode, failure_message: failureMessage });
+    },
+    // Someone cancelled the PaymentIntent outside Plate Vista.
+    cancelPaymentIntent(id) {
+      intents.get(id).status = "canceled";
+    },
     setReaderStatus(id, status) {
       readers.get(id).status = status;
     },
+    paymentIntent: (id) => unexpanded(intents.get(id)),
+    charge: (id) => {
+      const intent = [...intents.values()].find((found) => found.latest_charge?.id === id);
+      return intent ? structuredClone(intent.latest_charge) : undefined;
+    },
+    paymentIntentsCreated: () => intentsCreated,
+    readerRequests: () => readerRequests,
+    captures: () => captures,
+    reader: (id) => withoutAccount(structuredClone(readers.get(id))),
     readersOn: (stripeAccount) =>
       [...readers.values()].filter((reader) => reader.stripeAccount === stripeAccount).map(withoutAccount),
     locationsOn: (stripeAccount) =>
@@ -352,6 +417,201 @@ export const createFakeStripe = () => {
           readers.delete(id);
           return { id, object: "terminal.reader", deleted: true };
         },
+        // The reader asks for a card for the PaymentIntent. A reader busy
+        // with another action, or offline, is refused as Stripe does.
+        async processPaymentIntent(id, params, options = {}) {
+          calls.push(["terminal.readers.processPaymentIntent", id, params, options]);
+          maybeFail("terminal.readers.processPaymentIntent");
+          return once(options, () => {
+            const reader = terminalObject(readers, "terminal.reader", id, options.stripeAccount);
+            terminalObject(intents, "payment_intent", params.payment_intent, options.stripeAccount);
+            if (reader.status !== "online") {
+              throw invalidRequest("Reader is currently offline.", { code: "terminal_reader_offline" });
+            }
+            if (reader.action?.status === "in_progress") {
+              throw invalidRequest("Reader is currently busy processing another request.", { code: "terminal_reader_busy" });
+            }
+            reader.action = {
+              type: "process_payment_intent",
+              status: "in_progress",
+              process_payment_intent: { payment_intent: params.payment_intent },
+            };
+            readerRequests += 1;
+            return withoutAccount(structuredClone(reader));
+          });
+        },
+        async retrieve(id, params, options = {}) {
+          calls.push(["terminal.readers.retrieve", id, params, options]);
+          maybeFail("terminal.readers.retrieve");
+          return withoutAccount(structuredClone(terminalObject(readers, "terminal.reader", id, options.stripeAccount)));
+        },
+        // Stops what the reader is doing; Stripe refuses when it is doing nothing.
+        async cancelAction(id, params, options = {}) {
+          calls.push(["terminal.readers.cancelAction", id, params, options]);
+          maybeFail("terminal.readers.cancelAction");
+          const reader = terminalObject(readers, "terminal.reader", id, options.stripeAccount);
+          if (reader.action?.status !== "in_progress") {
+            throw invalidRequest("Reader has no in-progress action to cancel.", { code: "terminal_reader_no_action" });
+          }
+          Object.assign(reader.action, { status: "failed", failure_code: "canceled" });
+          return withoutAccount(structuredClone(reader));
+        },
+      },
+    },
+    testHelpers: {
+      terminal: {
+        readers: {
+          // A card tapped on a Simulated Reader: 4242... is approved, so the
+          // PaymentIntent is authorized and waits to be captured.
+          async presentPaymentMethod(id, params = {}, options = {}) {
+            calls.push(["testHelpers.terminal.readers.presentPaymentMethod", id, params, options]);
+            maybeFail("testHelpers.terminal.readers.presentPaymentMethod");
+            const reader = terminalObject(readers, "terminal.reader", id, options.stripeAccount);
+            if (!reader.device_type.startsWith("simulated_")) {
+              throw invalidRequest("This endpoint can only be used with simulated readers.");
+            }
+            if (reader.action?.status !== "in_progress") {
+              throw invalidRequest("The reader has no action in progress.");
+            }
+            const intent = intents.get(reader.action.process_payment_intent.payment_intent);
+            const suffix = randomBytes(8).toString("hex");
+            const number = String(params.card_present?.number || "4242424242424242");
+            const decline = DECLINES[number];
+            if (decline) {
+              // Stripe declines it: the charge fails, the PaymentIntent waits
+              // for another card and the reader's action fails.
+              Object.assign(intent, {
+                status: "requires_payment_method",
+                // Stripe gives the charge as an id unless it is expanded.
+                latest_charge: `ch_${suffix}`,
+                last_payment_error: {
+                  type: "card_error",
+                  charge: `ch_${suffix}`,
+                  code: decline.code,
+                  ...(decline.declineCode ? { decline_code: decline.declineCode } : {}),
+                  message: decline.message,
+                },
+              });
+              Object.assign(reader.action, {
+                status: "failed",
+                failure_code: "card_declined",
+                failure_message: decline.message,
+              });
+              return withoutAccount(structuredClone(reader));
+            }
+            Object.assign(intent, {
+              status: "requires_capture",
+              last_payment_error: null,
+              amount_capturable: intent.amount,
+              latest_charge: {
+                id: `ch_${suffix}`,
+                object: "charge",
+                created: Math.floor(Date.now() / 1000),
+                payment_method_details: {
+                  type: "card_present",
+                  // As Stripe sends it, with fields Plate Vista must not keep.
+                  card_present: {
+                    brand: "visa",
+                    brand_product: "F",
+                    cardholder_name: "TEST/CARD",
+                    country: "US",
+                    emv_auth_data: "8A023030",
+                    exp_month: 12,
+                    exp_year: 2030,
+                    fingerprint: "fp_test_card",
+                    funding: "credit",
+                    generated_card: "pm_generated_card",
+                    last4: String(params.card_present?.number || "4242424242424242").slice(-4),
+                    network: "visa",
+                    network_transaction_id: "nti_test",
+                    read_method: "contactless_emv",
+                    receipt: {
+                      account_type: "credit",
+                      application_cryptogram: "1A2B3C4D5E6F7A8B",
+                      application_preferred_name: "VISA CREDIT",
+                      authorization_code: "123456",
+                      authorization_response_code: "3030",
+                      cardholder_verification_method: "none",
+                      dedicated_file_name: "A0000000031010",
+                      terminal_verification_results: "0000000000",
+                      transaction_status_information: "0000",
+                    },
+                  },
+                },
+              },
+            });
+            reader.action.status = "succeeded";
+            return withoutAccount(structuredClone(reader));
+          },
+        },
+      },
+    },
+    paymentIntents: {
+      async create(params, options = {}) {
+        calls.push(["paymentIntents.create", params, options]);
+        maybeFail("paymentIntents.create");
+        return once(options, () => {
+          const intent = {
+            id: `pi_${randomBytes(12).toString("hex")}`,
+            object: "payment_intent",
+            amount: params.amount,
+            amount_capturable: 0,
+            amount_received: 0,
+            currency: params.currency,
+            capture_method: params.capture_method,
+            payment_method_types: params.payment_method_types,
+            application_fee_amount: params.application_fee_amount ?? null,
+            metadata: { ...params.metadata },
+            status: "requires_payment_method",
+            latest_charge: null,
+          };
+          intents.set(intent.id, { ...intent, stripeAccount: options.stripeAccount });
+          intentsCreated += 1;
+          return structuredClone(intent);
+        });
+      },
+      async retrieve(id, params, options = {}) {
+        calls.push(["paymentIntents.retrieve", id, params, options]);
+        maybeFail("paymentIntents.retrieve");
+        return unexpanded(terminalObject(intents, "payment_intent", id, options.stripeAccount), params);
+      },
+      // Stripe captures only an authorized PaymentIntent.
+      async capture(id, params, options = {}) {
+        calls.push(["paymentIntents.capture", id, params, options]);
+        maybeFail("paymentIntents.capture");
+        return once(options, () => {
+          const intent = terminalObject(intents, "payment_intent", id, options.stripeAccount);
+          if (intent.status !== "requires_capture") {
+            throw invalidRequest(
+              `This PaymentIntent could not be captured because it has a status of ${intent.status}.`,
+              { code: "payment_intent_unexpected_state" }
+            );
+          }
+          Object.assign(intent, { status: "succeeded", amount_received: intent.amount, amount_capturable: 0 });
+          captures += 1;
+          return withoutAccount(structuredClone(intent));
+        });
+      },
+      // Releases the authorization, or stops the PaymentIntent before a card
+      // is read; a reader still asking for its card stops too. Stripe refuses
+      // once it is captured or already cancelled.
+      async cancel(id, params, options = {}) {
+        calls.push(["paymentIntents.cancel", id, params, options]);
+        maybeFail("paymentIntents.cancel");
+        const intent = terminalObject(intents, "payment_intent", id, options.stripeAccount);
+        if (["succeeded", "canceled"].includes(intent.status)) {
+          throw invalidRequest(
+            `You cannot cancel this PaymentIntent because it has a status of ${intent.status}.`,
+            { code: "payment_intent_unexpected_state" }
+          );
+        }
+        Object.assign(intent, { status: "canceled", amount_capturable: 0 });
+        for (const reader of readers.values()) {
+          if (reader.action?.status === "in_progress" && reader.action.process_payment_intent?.payment_intent === id) {
+            Object.assign(reader.action, { status: "failed", failure_code: "canceled" });
+          }
+        }
+        return withoutAccount(structuredClone(intent));
       },
     },
     refunds: {

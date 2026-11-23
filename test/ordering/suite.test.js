@@ -2299,6 +2299,10 @@ const AUTHENTICATED_ROUTES = [
   "POST /api/v1/sessions/:id/payments",
   "POST /api/v1/sessions/:id/online-payment",
   "POST /api/v1/sessions/:id/online-payment/cancel",
+  "POST /api/v1/sessions/:id/card-reader-payment",
+  "POST /api/v1/sessions/:id/card-reader-payment/test-card",
+  "POST /api/v1/sessions/:id/card-reader-payment/retry",
+  "POST /api/v1/sessions/:id/card-reader-payment/cancel",
   "GET /api/v1/table",
   "POST /api/v1/table",
   "GET /api/v1/table/:id",
@@ -2309,6 +2313,7 @@ const AUTHENTICATED_ROUTES = [
   "GET /api/v1/statistics/summary",
   "GET /api/v1/statistics/sales/categories",
   "GET /api/v1/statistics/sales/menu-items",
+  "GET /api/v1/statistics/sales/payment-methods",
   "GET /api/v1/statistics/orders/by-date",
   "GET /api/v1/statistics/customers/top",
   "GET /api/v1/statistics/:id/orders",
@@ -2757,6 +2762,12 @@ test("cross-tenant lists, creates, stats, public menu, and sockets stay inside r
   assert.equal(byItem.body[0].numSold, 2);
   assert.equal(JSON.stringify(byItem.body).includes(`Secret ${tag}`), false);
 
+  // Neither bill is paid; payment stats count A's payments only (card-reader-receipt.test.js).
+  const byMethod = await asA("get", "/api/v1/statistics/sales/payment-methods");
+  cover("GET", "/api/v1/statistics/sales/payment-methods");
+  assert.equal(byMethod.status, 200);
+  assert.deepEqual(byMethod.body.map((row) => row.group), ["CASH", "CARD", "ONLINE"]);
+
   const byDate = await asA("get", "/api/v1/statistics/orders/by-date");
   cover("GET", "/api/v1/statistics/orders/by-date");
   assert.equal(byDate.status, 200);
@@ -2822,6 +2833,10 @@ test("cross-tenant lists, creates, stats, public menu, and sockets stay inside r
     ["post", `/api/v1/sessions/${orderB.order.sessionId}/payments`, "POST /api/v1/sessions/:id/payments"],
     ["post", `/api/v1/sessions/${orderB.order.sessionId}/online-payment`, "POST /api/v1/sessions/:id/online-payment"],
     ["post", `/api/v1/sessions/${orderB.order.sessionId}/online-payment/cancel`, "POST /api/v1/sessions/:id/online-payment/cancel"],
+    ["post", `/api/v1/sessions/${orderB.order.sessionId}/card-reader-payment`, "POST /api/v1/sessions/:id/card-reader-payment"],
+    ["post", `/api/v1/sessions/${orderB.order.sessionId}/card-reader-payment/test-card`, "POST /api/v1/sessions/:id/card-reader-payment/test-card"],
+    ["post", `/api/v1/sessions/${orderB.order.sessionId}/card-reader-payment/retry`, "POST /api/v1/sessions/:id/card-reader-payment/retry"],
+    ["post", `/api/v1/sessions/${orderB.order.sessionId}/card-reader-payment/cancel`, "POST /api/v1/sessions/:id/card-reader-payment/cancel"],
   ];
   for (const [method, url, pattern] of missing) {
     const res = await asA(method, url).send({ inStock: false, capacity: 2, position: "kitchen" });

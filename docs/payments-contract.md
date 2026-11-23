@@ -274,6 +274,14 @@ Staff send a **Bill**'s payment to a **Card Reader**, and the guest taps or inse
 
 Every route here answers 503 `STRIPE_NOT_CONFIGURED` when the server has no Stripe keys. **Test mode** means the server runs with Stripe test keys; only then do **Simulated Readers** exist.
 
+**Stripe setup (manual, once per mode, #91):** the connected-accounts webhook destination that already sends `checkout.session.completed` to `POST /api/v1/webhooks/stripe` (signing secret in `STRIPE_WEBHOOK_SECRET`) must also send these events, in test mode and in live mode:
+
+| Event | Without it |
+|---|---|
+| `payment_intent.amount_capturable_updated` | an authorized card is captured and recorded only when the server asks Stripe (a `receipt-token` poll, a cancel, a staff payment, a close, or expiry) |
+| `payment_intent.payment_failed` | a declined card is not reported; the attempt runs until it expires |
+| `terminal.reader.action_failed` | a reader that fails (offline, timed out, cancelled on the reader) is not reported; the attempt runs until it expires |
+
 ### Shapes
 
 ```ts
@@ -578,6 +586,32 @@ CardPresentDetails = {
     "authorizedAt": "2026-11-22T19:01:09.000Z"
   }
 }
+```
+
+### Sales by payment method (owner, admin; like the other statistics)
+
+```
+GET /statistics/sales/payment-methods?start_date&end_date   both or neither; by paidAt
+  -> 200 PaymentMethodSales[]          always CASH, CARD, ONLINE, in that order
+  -> 400 { error }                     only one of start_date, end_date, or an invalid date
+
+PaymentMethodSales = {
+  group: 'CASH' | 'CARD' | 'ONLINE',   // CARD = CARD_TERMINAL + CARD_READER
+  count, totalCents,
+  methods: [{ method: PaymentMethod, count, totalCents }],   // the exact methods used in the group; [] when none
+}
+```
+
+```jsonc
+// GET /api/v1/statistics/sales/payment-methods
+[
+  { "group": "CASH", "count": 1, "totalCents": 1000, "methods": [{ "method": "CASH", "count": 1, "totalCents": 1000 }] },
+  { "group": "CARD", "count": 3, "totalCents": 7000, "methods": [
+    { "method": "CARD_TERMINAL", "count": 2, "totalCents": 3000 },
+    { "method": "CARD_READER", "count": 1, "totalCents": 4000 }
+  ] },
+  { "group": "ONLINE", "count": 0, "totalCents": 0, "methods": [] }
+]
 ```
 
 ### Errors

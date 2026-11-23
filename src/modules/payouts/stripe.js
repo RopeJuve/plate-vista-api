@@ -366,3 +366,140 @@ export const removeCardReader = async ({ stripeAccountId, stripeReaderId }) => {
     throw error;
   }
 };
+
+// Card reader payments (ADR-0008): a card-present PaymentIntent on the Payout
+// Account, captured by hand only while its bill is still frozen for it, and
+// handed to the reader to collect. Each call carries an idempotency key from
+// the attempt, so a repeated start is one PaymentIntent and one reader request.
+export const createCardReaderPaymentIntent = async ({
+  stripeAccountId,
+  attemptId,
+  amountCents,
+  applicationFeeCents,
+  metadata,
+}) => {
+  const intent = await client().paymentIntents.create(
+    {
+      amount: amountCents,
+      currency: "eur",
+      payment_method_types: ["card_present"],
+      capture_method: "manual",
+      metadata,
+      ...(applicationFeeCents > 0 ? { application_fee_amount: applicationFeeCents } : {}),
+    },
+    { stripeAccount: stripeAccountId, idempotencyKey: `card-reader-payment-${attemptId}` }
+  );
+  return { paymentIntentId: intent.id };
+};
+
+// Tells the reader to ask for a card for the PaymentIntent.
+export const collectOnCardReader = async ({ stripeAccountId, stripeReaderId, paymentIntentId, attemptId }) => {
+  await client().terminal.readers.processPaymentIntent(
+    stripeReaderId,
+    { payment_intent: paymentIntentId },
+    { stripeAccount: stripeAccountId, idempotencyKey: `card-reader-collect-${attemptId}` }
+  );
+};
+
+// Stops the reader asking for a card for this PaymentIntent. A reader doing
+// nothing, or by now collecting another PaymentIntent, is left alone.
+export const stopCollectingOnCardReader = async ({ stripeAccountId, stripeReaderId, paymentIntentId }) => {
+  const reader = await client().terminal.readers.retrieve(stripeReaderId, {}, { stripeAccount: stripeAccountId });
+  const action = reader?.action;
+  if (action?.status !== "in_progress" || action.process_payment_intent?.payment_intent !== paymentIntentId) return;
+  try {
+    await client().terminal.readers.cancelAction(stripeReaderId, {}, { stripeAccount: stripeAccountId });
+  } catch (error) {
+    // It finished or stopped between the two calls.
+    if (error?.type === "StripeInvalidRequestError") return;
+    throw error;
+  }
+};
+
+// Cancels a card reader PaymentIntent, releasing any authorization, so it can
+// never be captured. One already cancelled, or not on that account, counts
+// as cancelled.
+export const cancelCardReaderPaymentIntent = async ({ stripeAccountId, paymentIntentId }) => {
+  try {
+    await client().paymentIntents.cancel(paymentIntentId, {}, { stripeAccount: stripeAccountId });
+  } catch (error) {
+    if (error?.type === "StripeInvalidRequestError" && (error.statusCode === 404 || error.code === "resource_missing")) {
+      return;
+    }
+    if (error?.code !== "payment_intent_unexpected_state") throw error;
+    const intent = await client().paymentIntents.retrieve(paymentIntentId, {}, { stripeAccount: stripeAccountId });
+    if (intent.status !== "canceled") throw error;
+  }
+};
+
+// Stripe's test cards (test mode only), by the contract's TestCard names.
+export const TEST_CARD_NUMBERS = {
+  APPROVED: "4242424242424242",
+  DECLINED: "4000000000000002",
+  INSUFFICIENT_FUNDS: "4000000000009995",
+  LOST_CARD: "4000000000009987",
+  STOLEN_CARD: "4000000000009979",
+  EXPIRED_CARD: "4000000000000069",
+  PROCESSING_ERROR: "4000000000000119",
+};
+
+// A card reader PaymentIntent as Stripe keeps it now: its status, amount and
+// why its last card failed (Stripe's last_payment_error, or null).
+export const retrieveCardReaderPaymentIntent = async ({ stripeAccountId, paymentIntentId }) => {
+  const intent = await client().paymentIntents.retrieve(paymentIntentId, {}, { stripeAccount: stripeAccountId });
+  return { status: intent.status, amountCents: intent.amount, lastPaymentError: intent.last_payment_error ?? null };
+};
+
+// Presents a test card on a Simulated Reader through Stripe's test helpers.
+export const presentTestCard = async ({ stripeAccountId, stripeReaderId, card }) => {
+  await client().testHelpers.terminal.readers.presentPaymentMethod(
+    stripeReaderId,
+    { type: "card_present", card_present: { number: TEST_CARD_NUMBERS[card] } },
+    { stripeAccount: stripeAccountId }
+  );
+};
+
+// What a card receipt needs about a card taken on a reader, from a
+// PaymentIntent whose latest_charge is expanded; null without a card-present
+// charge. Only these fields are kept: never the PAN, expiry, cardholder
+// name, cryptogram or anything else Stripe sends about the card.
+export const cardPresentDetailsOf = (intent) => {
+  const charge = intent && typeof intent.latest_charge === "object" ? intent.latest_charge : null;
+  const method = charge?.payment_method_details;
+  if (method?.type !== "card_present" || !method.card_present) return null;
+  const card = method.card_present;
+  const details = {
+    type: "card_present",
+    brand: card.brand,
+    last4: card.last4,
+    funding: card.funding,
+    authorizationCode: card.receipt?.authorization_code,
+    aid: card.receipt?.dedicated_file_name,
+    applicationLabel: card.receipt?.application_preferred_name,
+    readMethod: card.read_method,
+    paymentIntentId: intent.id,
+    authorizedAt: fromUnix(charge.created),
+  };
+  return Object.fromEntries(Object.entries(details).filter(([, value]) => value != null && value !== ""));
+};
+
+// The card-present details of a card reader PaymentIntent on the restaurant's
+// Payout Account (cardPresentDetailsOf); null when it has no such charge.
+export const retrieveCardReaderPaymentDetails = async ({ stripeAccountId, paymentIntentId }) =>
+  cardPresentDetailsOf(
+    await client().paymentIntents.retrieve(
+      paymentIntentId,
+      { expand: ["latest_charge"] },
+      { stripeAccount: stripeAccountId }
+    )
+  );
+
+// Captures an authorized card reader payment. The key comes from the
+// PaymentIntent, so a redelivered webhook never captures twice.
+export const captureCardReaderPayment = async ({ stripeAccountId, paymentIntentId }) => {
+  await client().paymentIntents.capture(
+    paymentIntentId,
+    {},
+    { stripeAccount: stripeAccountId, idempotencyKey: `card-reader-capture-${paymentIntentId}` }
+  );
+};

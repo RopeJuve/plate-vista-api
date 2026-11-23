@@ -132,11 +132,13 @@ test("cash and card each create a pending payment with a 32-hex receipt token", 
         "id",
         "method",
         "paidAt",
+        "paymentDetails",
         "receiptToken",
         "sessionId",
         "signature",
       ]);
       assert.equal(res.body.method, method);
+      assert.equal(res.body.paymentDetails, null);
       assert.equal(res.body.amountCents, 2000);
       assert.equal(res.body.sessionId, placed.sessionId);
       assert.match(res.body.receiptToken, /^[0-9a-f]{32}$/);

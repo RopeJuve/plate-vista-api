@@ -1,8 +1,10 @@
-import Restaurant from "../restaurants/restaurant.model.js";
-import TableSession from "../ordering/session.model.js";
+import TableSession, { PAYMENT_IN_PROGRESS_KIND } from "../ordering/session.model.js";
 import { expireOnlinePaymentCheckout } from "../payouts/stripe.js";
 import { publishBillUnfrozen } from "./events.js";
 import { reconcileOnlinePayment } from "./onlinePayment.service.js";
+import { endCardReaderPayment } from "./cardReaderPaymentEnd.js";
+import { reopenFrozenBill, sessionStatusOf, UNFREEZE_REASON } from "./billFreeze.js";
+import { stripeAccountOf } from "./stripeContext.js";
 import { AppError } from "../../shared/errors.js";
 import { captureException, logger } from "../../shared/logger.js";
 
@@ -19,14 +21,23 @@ const payingOnline = () =>
 // the bill unfreezes anyway; a payment that still completes is a Late
 // Payment and is refunded. Without it the failure throws
 // PAYMENT_PROVIDER_ERROR and the bill stays frozen.
+// `reason` is bill.unfrozen's: CANCELLED, or STAFF_PAYMENT for a staff
+// payment or close. A card reader payment is left alone here
+// (cardReaderPaymentEnd.js ends those; endPaymentInProgress ends either).
 // Returns { status } of the session afterwards.
-export const unfreezeBill = async (ctx, sessionId, { evenIfStripeFails = false } = {}) => {
+export const unfreezeBill = async (
+  ctx,
+  sessionId,
+  { evenIfStripeFails = false, reason = UNFREEZE_REASON.CANCELLED } = {}
+) => {
   const session = await TableSession.findOne({ _id: sessionId, restaurantId: ctx.restaurantId })
     .select("status paymentInProgress")
     .lean();
   if (!session) throw new AppError("NOT_FOUND", "Not found", 404);
   // Only an online payment is ever in progress today.
-  if (session.status !== "paying" || session.paymentInProgress?.kind !== "online") return { status: session.status };
+  if (session.status !== "paying" || session.paymentInProgress?.kind !== PAYMENT_IN_PROGRESS_KIND.ONLINE) {
+    return { status: session.status };
+  }
 
   const { attemptId, checkoutSessionId } = session.paymentInProgress;
   // Without a Checkout Session id, Stripe has not made one yet, or never did.
@@ -39,9 +50,8 @@ export const unfreezeBill = async (ctx, sessionId, { evenIfStripeFails = false }
     };
     let outcome;
     try {
-      const restaurant = await Restaurant.findById(ctx.restaurantId).select("payoutAccount.stripeAccountId").lean();
       outcome = await expireOnlinePaymentCheckout({
-        stripeAccountId: restaurant?.payoutAccount?.stripeAccountId,
+        stripeAccountId: await stripeAccountOf(ctx.restaurantId),
         checkoutSessionId,
       });
     } catch (error) {
@@ -60,22 +70,25 @@ export const unfreezeBill = async (ctx, sessionId, { evenIfStripeFails = false }
         captureException(error);
       }
       if (!recorded) throw payingOnline();
-      const after = await TableSession.findOne({ _id: sessionId, restaurantId: ctx.restaurantId })
-        .select("status")
-        .lean();
-      return { status: after.status };
+      return { status: await sessionStatusOf(ctx.restaurantId, sessionId) };
     }
   }
 
   // Only this online payment's freeze: something else may have moved it on.
-  const result = await TableSession.updateOne(
-    { _id: sessionId, restaurantId: ctx.restaurantId, status: "paying", "paymentInProgress.attemptId": attemptId },
-    { $set: { status: "open" }, $unset: { paymentInProgress: 1 } }
-  );
-  if (result.modifiedCount > 0) {
-    publishBillUnfrozen({ restaurantId: ctx.restaurantId, sessionId });
+  if (await reopenFrozenBill({ restaurantId: ctx.restaurantId, sessionId, attemptId })) {
+    publishBillUnfrozen({ restaurantId: ctx.restaurantId, sessionId, reason });
     return { status: "open" };
   }
-  const now = await TableSession.findOne({ _id: sessionId, restaurantId: ctx.restaurantId }).select("status").lean();
-  return { status: now.status };
+  return { status: await sessionStatusOf(ctx.restaurantId, sessionId) };
+};
+
+// Staff win (GLOSSARY.md, Bill): before staff record a payment or close the
+// table, whatever payment the bill is frozen for ends, online or on a card
+// reader, with reason STAFF_PAYMENT, even when Stripe cannot be reached. A
+// payment Stripe has already taken is recorded instead, so the staff
+// payment then answers BILL_PAID; an online one Stripe cannot confirm
+// throws BILL_PAYING_ONLINE (unfreezeBill).
+export const endPaymentInProgress = async (ctx, sessionId) => {
+  await unfreezeBill(ctx, sessionId, { evenIfStripeFails: true, reason: UNFREEZE_REASON.STAFF_PAYMENT });
+  await endCardReaderPayment(ctx, sessionId, { reason: UNFREEZE_REASON.STAFF_PAYMENT });
 };

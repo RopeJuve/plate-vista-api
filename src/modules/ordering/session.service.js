@@ -9,8 +9,8 @@ import { captureException, logger } from "../../shared/logger.js";
 import { publish } from "../../realtime/events.js";
 import { serializeOrder, serializeSession } from "./serialize.js";
 import { serializePayment } from "../payments/serialize.js";
-import { unfreezeBill } from "../payments/unfreeze.js";
-import { reconcileOnlinePayment } from "../payments/onlinePayment.service.js";
+import { endPaymentInProgress } from "../payments/unfreeze.js";
+import { reconcileBillPayment } from "../payments/reconcile.js";
 
 // Short code guests read to each other at the table. No 0/O or 1/I.
 const newJoinCode = customAlphabet("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", 4);
@@ -130,7 +130,7 @@ const unpaidTotalCents = async (restaurantId, sessionId, mongoSession) => {
   return orders.reduce((sum, order) => sum + order.totalCents, 0);
 };
 
-// Staff win over an online payment: a frozen bill is unfrozen before its
+// Staff win over an online or card reader payment: a frozen bill is unfrozen before its
 // table closes, even when Stripe cannot be reached. A close that would fail
 // as unpaid fails first, so the guest's payment runs on.
 const unfreezeToClose = async (ctx, sessionId, unpaidReason) => {
@@ -138,18 +138,18 @@ const unfreezeToClose = async (ctx, sessionId, unpaidReason) => {
     .select("status")
     .lean();
   if (session?.status !== "paying") return;
-  // The guest may have paid on Stripe without the webhook arriving: record it
+  // The guest may have paid on Stripe (online or on the reader) without the webhook arriving: record it
   // first, so a paid table closes instead of reading as unpaid.
   try {
-    if (await reconcileOnlinePayment(ctx.restaurantId, sessionId)) return;
+    if (await reconcileBillPayment(ctx.restaurantId, sessionId)) return;
   } catch (error) {
-    logger.error({ restaurantId: String(ctx.restaurantId), sessionId: String(sessionId), err: error }, "checking the online payment with Stripe failed");
+    logger.error({ restaurantId: String(ctx.restaurantId), sessionId: String(sessionId), err: error }, "checking the payment with Stripe failed");
     captureException(error);
   }
   if (unpaidReason === undefined && (await unpaidTotalCents(ctx.restaurantId, sessionId, null)) > 0) {
     throw new AppError("BILL_UNPAID", "The bill is not paid yet");
   }
-  await unfreezeBill(ctx, sessionId, { evenIfStripeFails: true });
+  await endPaymentInProgress(ctx, sessionId);
 };
 
 // A bill above 0 closes once it is paid; an owner or admin can close it unpaid

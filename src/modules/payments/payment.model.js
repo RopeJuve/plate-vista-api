@@ -2,7 +2,13 @@ import { randomBytes } from "node:crypto";
 import { Schema, model } from "mongoose";
 import { tenantPlugin } from "../../shared/tenantPlugin.js";
 
-export const PAYMENT_METHODS = ["CASH", "CARD_TERMINAL", "ONLINE"];
+export const PAYMENT_METHOD = Object.freeze({
+  CASH: "CASH",
+  CARD_TERMINAL: "CARD_TERMINAL",
+  CARD_READER: "CARD_READER",
+  ONLINE: "ONLINE",
+});
+export const PAYMENT_METHODS = Object.values(PAYMENT_METHOD);
 export const SIGNATURE_STATUSES = ["PENDING", "SIGNED", "FAILED"];
 
 export const newReceiptToken = () => randomBytes(16).toString("hex");
@@ -34,8 +40,10 @@ const tseSchema = new Schema(
 
 // How the guest paid by card (or wallet, PayPal, ...), as Stripe saw it, kept
 // when a payment the provider records is recorded, so the receipt never has
-// to ask Stripe. `type` is Stripe's payment method type (card, paypal,
-// klarna, ...); the card fields only for cards.
+// to ask Stripe. `type` is Stripe's payment method type (card, card_present,
+// paypal, klarna, ...); the card fields only for cards, and aid,
+// applicationLabel and readMethod only for a card taken on a card reader.
+// Nothing else about the card is kept.
 const cardDetailsSchema = new Schema(
   {
     type: { type: String, required: true },
@@ -44,6 +52,9 @@ const cardDetailsSchema = new Schema(
     funding: { type: String },
     wallet: { type: String },
     authorizationCode: { type: String },
+    aid: { type: String },
+    applicationLabel: { type: String },
+    readMethod: { type: String },
     paymentIntentId: { type: String },
     authorizedAt: { type: Date },
   },

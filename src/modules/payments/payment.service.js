@@ -1,18 +1,20 @@
 import mongoose from "mongoose";
-import Payment from "./payment.model.js";
-import TableSession from "../ordering/session.model.js";
+import Payment, { PAYMENT_METHOD } from "./payment.model.js";
+import TableSession, { PAYMENT_IN_PROGRESS_KIND } from "../ordering/session.model.js";
 import Restaurant from "../restaurants/restaurant.model.js";
 import { serializePayment } from "./serialize.js";
 import { recordPaymentSchema } from "./payment.schemas.js";
 import { requestSigning } from "./signing.js";
 import { publishBillPaid } from "./events.js";
-import { unfreezeBill } from "./unfreeze.js";
+import { endPaymentInProgress } from "./unfreeze.js";
+import { isCardReaderAttempt, reopenFrozenBill } from "./billFreeze.js";
 import { isTseActive } from "../tse/tse.service.js";
 import { getSessionBill } from "../ordering/order.service.js";
 import { findSession, touchSession } from "../ordering/session.service.js";
 import { AppError, isDuplicateKey } from "../../shared/errors.js";
 import { parseOrThrow } from "../../shared/validate.js";
 import { captureException, logger } from "../../shared/logger.js";
+import { captureCardReaderPayment } from "../payouts/stripe.js";
 
 const findReplay = async (restaurantId, sessionId, clientPaymentId, mongoSession) => {
   const query = Payment.findOne({ restaurantId, clientPaymentId });
@@ -101,13 +103,14 @@ const payBill = async (ctx, sessionId, { method, clientPaymentId, settle }) => {
 };
 
 // Records that staff took the bill's money in cash or at the card terminal.
-// Staff win over an online payment: a frozen bill is unfrozen first, even
-// when Stripe cannot be reached. Returns { payment, replayed }; a replay is the payment an earlier request
-// with the same clientPaymentId recorded.
+// Staff win over an online or card reader payment: a frozen bill is unfrozen
+// first, even when Stripe cannot be reached. Returns { payment, replayed }; a
+// replay is the payment an earlier request with the same clientPaymentId
+// recorded.
 export const recordPayment = async (ctx, sessionId, input) => {
   await findSession(ctx.restaurantId, sessionId);
   const payload = parseOrThrow(recordPaymentSchema, input);
-  await unfreezeBill(ctx, sessionId, { evenIfStripeFails: true });
+  await endPaymentInProgress(ctx, sessionId);
   const { payment, replayed } = await payBill(ctx, sessionId, {
     method: payload.method,
     clientPaymentId: payload.clientPaymentId,
@@ -140,7 +143,7 @@ const latePayment = (reason) =>
 export const recordOnlinePayment = async (ctx, sessionId, checkoutSessionId) => {
   try {
     return await payBill(ctx, sessionId, {
-      method: "ONLINE",
+      method: PAYMENT_METHOD.ONLINE,
       clientPaymentId: checkoutSessionId,
       settle: async (bill, mongoSession) => {
         const session = await TableSession.findOne({ _id: sessionId, restaurantId: ctx.restaurantId })
@@ -151,15 +154,12 @@ export const recordOnlinePayment = async (ctx, sessionId, checkoutSessionId) => 
         const attempt = session.paymentInProgress;
         if (
           session.status !== "paying" ||
-          attempt?.kind !== "online" ||
+          attempt?.kind !== PAYMENT_IN_PROGRESS_KIND.ONLINE ||
           attempt.checkoutSessionId !== checkoutSessionId
         ) {
           throw latePayment("BILL_NOT_FROZEN");
         }
-        await TableSession.updateOne(
-          { _id: sessionId, restaurantId: ctx.restaurantId },
-          { $set: { status: "open" }, $unset: { paymentInProgress: 1 } }
-        ).session(mongoSession);
+        await reopenFrozenBill({ restaurantId: ctx.restaurantId, sessionId, attemptId: attempt.attemptId, mongoSession });
         return attempt.amountCents;
       },
     });
@@ -168,3 +168,29 @@ export const recordOnlinePayment = async (ctx, sessionId, checkoutSessionId) => 
     throw error;
   }
 };
+
+// Records a card reader payment once Stripe says the card was authorized
+// (ADR-0008). Only the PaymentIntent the bill is frozen for pays it: it is
+// captured right there, while the bill is still frozen, and the Payment's
+// amount is the frozen bill's. The PaymentIntent id is its clientPaymentId,
+// so a repeated event replays without capturing again; the capture's
+// idempotency key covers a transaction that runs twice. Anything else throws
+// NOT_FROZEN_FOR_IT and nothing is captured.
+export const recordCardReaderPayment = (ctx, sessionId, { paymentIntentId, stripeAccountId }) =>
+  payBill(ctx, sessionId, {
+    method: PAYMENT_METHOD.CARD_READER,
+    clientPaymentId: paymentIntentId,
+    settle: async (bill, mongoSession) => {
+      const session = await TableSession.findOne({ _id: sessionId, restaurantId: ctx.restaurantId })
+        .select("status paymentInProgress")
+        .session(mongoSession)
+        .lean();
+      const attempt = session.paymentInProgress;
+      if (!isCardReaderAttempt(session) || attempt.paymentIntentId !== paymentIntentId) {
+        throw new AppError("NOT_FROZEN_FOR_IT", "The bill is not frozen for this card reader payment");
+      }
+      await reopenFrozenBill({ restaurantId: ctx.restaurantId, sessionId, attemptId: attempt.attemptId, mongoSession });
+      await captureCardReaderPayment({ stripeAccountId, paymentIntentId });
+      return attempt.amountCents;
+    },
+  });

@@ -4,6 +4,8 @@ import { logger } from "../../shared/logger.js";
 import { parseOrThrow } from "../../shared/validate.js";
 import { isTseActive } from "../tse/tse.service.js";
 import { completeOnlinePayment, expireOnlinePayment } from "../payments/onlinePayment.service.js";
+import { captureCardReaderAuthorization } from "../payments/cardReaderCapture.service.js";
+import { failCardReaderAttempt } from "../payments/cardReaderFailure.service.js";
 import { updatePayoutAccountSchema } from "./payout.schemas.js";
 import {
   assertStripeConfigured,
@@ -132,6 +134,9 @@ export const startPayoutOnboarding = async (restaurantId) => {
 const HANDLERS = {
   "checkout.session.completed": (event) => completeOnlinePayment(event),
   "checkout.session.expired": (event) => expireOnlinePayment(event),
+  "payment_intent.amount_capturable_updated": (event) => captureCardReaderAuthorization(event),
+  "payment_intent.payment_failed": (event) => failCardReaderAttempt(event),
+  "terminal.reader.action_failed": (event) => failCardReaderAttempt(event),
 };
 
 export const handleStripeEvent = async (event) => {

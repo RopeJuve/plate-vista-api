@@ -54,20 +54,47 @@ export const publishPaymentSignFailed = (payment) =>
     message: event("payment.signFailed", { paymentId: String(payment._id) }),
   });
 
-// The bill is frozen while a guest pays online (PROTOCOL 2.5).
-export const publishBillFrozen = ({ restaurantId, sessionId, expiresAt }) =>
+// The bill is frozen while a guest pays online or staff take a card reader
+// payment (PROTOCOL 2.5, 2.7): `kind` is ONLINE or CARD_READER, and
+// `readerName` names the reader for CARD_READER only.
+export const publishBillFrozen = ({ restaurantId, sessionId, expiresAt, kind, readerName = null, totalCents }) =>
   send({
     restaurantId,
     sessionId,
-    message: event("bill.frozen", { sessionId: String(sessionId), expiresAt: expiresAt.toISOString() }),
+    message: event("bill.frozen", {
+      sessionId: String(sessionId),
+      expiresAt: expiresAt.toISOString(),
+      kind,
+      readerName,
+      totalCents,
+    }),
   });
 
-// The bill is open again without being paid (PROTOCOL 2.5).
-export const publishBillUnfrozen = ({ restaurantId, sessionId }) =>
+// The bill is open again without being paid (PROTOCOL 2.5, 2.7): `reason` is
+// CANCELLED, EXPIRED, STAFF_PAYMENT or (card readers only) FAILED.
+export const publishBillUnfrozen = ({ restaurantId, sessionId, reason }) =>
   send({
     restaurantId,
     sessionId,
-    message: event("bill.unfrozen", { sessionId: String(sessionId) }),
+    message: event("bill.unfrozen", { sessionId: String(sessionId), reason }),
+  });
+
+// A card reader payment failed (PROTOCOL 2.7); staff only, so the decline
+// reason never shows on the table's devices. `bill.unfrozen` follows.
+export const publishBillPaymentFailed = ({ restaurantId, sessionId, tableNumber, readerName, amountCents, failure, failedAt }) =>
+  send({
+    restaurantId,
+    sessionId,
+    audience: "staff",
+    message: event("bill.paymentFailed", {
+      sessionId: String(sessionId),
+      tableNumber,
+      readerName,
+      amountCents,
+      reason: failure.reason,
+      message: failure.message,
+      failedAt: failedAt.toISOString(),
+    }),
   });
 
 // A Late Payment was refunded (PROTOCOL 2.5); staff only.
