@@ -138,7 +138,15 @@ export const startOnlinePayment = async (ctx, sessionId) => {
     { _id: sessionId, restaurantId: ctx.restaurantId, "paymentInProgress.attemptId": attempt.attemptId },
     { $set: { "paymentInProgress.checkoutSessionId": checkout.checkoutSessionId, "paymentInProgress.url": checkout.url } }
   );
-  if (froze) publishBillFrozen({ restaurantId: ctx.restaurantId, sessionId, expiresAt: attempt.expiresAt });
+  if (froze) {
+    publishBillFrozen({
+      restaurantId: ctx.restaurantId,
+      sessionId,
+      expiresAt: attempt.expiresAt,
+      kind: "ONLINE",
+      totalCents: attempt.amountCents,
+    });
+  }
   return present({ ...attempt, url: checkout.url });
 };
 
