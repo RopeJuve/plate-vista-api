@@ -240,7 +240,7 @@ export const expireOnlinePayment = async (event) => {
     },
     { $set: { status: "open" }, $unset: { paymentInProgress: 1 } }
   );
-  if (result.modifiedCount > 0) publishBillUnfrozen(bill);
+  if (result.modifiedCount > 0) publishBillUnfrozen({ ...bill, reason: "EXPIRED" });
 };
 
 // The bill is frozen for a Checkout Session the guest may have paid while the

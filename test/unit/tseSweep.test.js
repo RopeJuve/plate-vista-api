@@ -104,10 +104,26 @@ test("jobs start only with ENABLE_JOBS=true", () => {
   assert.equal(startJobs({ ENABLE_JOBS: "false" }, { createSweep }), null);
   assert.equal(startJobs({}, { createSweep }), null);
   assert.equal(created, 0);
-  const jobs = startJobs({ ENABLE_JOBS: "true" }, { createSweep });
+  const idle = () => ({ start() {}, stop: async () => {} });
+  const jobs = startJobs({ ENABLE_JOBS: "true" }, { createSweep, createCardReaderSweep: idle });
   assert.ok(jobs);
   assert.equal(created, 1);
   assert.equal(started, 1);
+});
+
+test("jobs include the card reader expiry sweep, and stopping the jobs stops both sweeps", async () => {
+  const events = [];
+  const fakeSweep = (name) => () => ({
+    start: () => events.push(`${name} started`),
+    stop: async () => events.push(`${name} stopped`),
+  });
+  const jobs = startJobs(
+    { ENABLE_JOBS: "true" },
+    { createSweep: fakeSweep("tse"), createCardReaderSweep: fakeSweep("card reader") }
+  );
+  assert.deepEqual(events.sort(), ["card reader started", "tse started"]);
+  await jobs.stop();
+  assert.deepEqual(events.slice(2).sort(), ["card reader stopped", "tse stopped"]);
 });
 
 test("shutdown stops the jobs before the database disconnects", async () => {

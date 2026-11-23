@@ -70,13 +70,13 @@ export const publishBillFrozen = ({ restaurantId, sessionId, expiresAt, kind, re
     }),
   });
 
-// The bill is open again without being paid (PROTOCOL 2.5, 2.7): `reason`
-// is CANCELLED, EXPIRED, STAFF_PAYMENT or FAILED.
+// The bill is open again without being paid (PROTOCOL 2.5, 2.7): `reason` is
+// CANCELLED, EXPIRED, STAFF_PAYMENT or (card readers only) FAILED.
 export const publishBillUnfrozen = ({ restaurantId, sessionId, reason }) =>
   send({
     restaurantId,
     sessionId,
-    message: event("bill.unfrozen", { sessionId: String(sessionId), ...(reason ? { reason } : {}) }),
+    message: event("bill.unfrozen", { sessionId: String(sessionId), reason }),
   });
 
 // A card reader payment failed (PROTOCOL 2.7); staff only, so the decline

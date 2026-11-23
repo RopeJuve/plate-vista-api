@@ -7,6 +7,7 @@
 //   fake.signedEvent(event, secret);                      // { body, signature }
 //   fake.calls;                                           // [["v2.core.accounts.create", params, options], ...]
 //   fake.failNext("checkout.sessions.create");            // the next such call throws a Stripe error
+//   fake.setDown(true);                                   // every call throws a Stripe error until setDown(false)
 //   fake.refundsCreated();                                // refunds Stripe actually made (idempotent replays not counted)
 //   fake.completeCheckoutSession(id);                     // the guest paid: expiring it now fails as Stripe does
 //   fake.completeCheckoutSession(id, { type: "paypal" }); // ... with these payment_method_details (default: a Visa card)
@@ -154,8 +155,11 @@ export const createFakeStripe = () => {
     return copy;
   };
 
+  // While Stripe is down, every call fails.
+  let down = false;
+
   const maybeFail = (op) => {
-    if (!failing.delete(op)) return;
+    if (!down && !failing.delete(op)) return;
     const error = new Error("Something went wrong on Stripe's end");
     error.type = "StripeAPIError";
     error.statusCode = 500;
@@ -209,6 +213,9 @@ export const createFakeStripe = () => {
     },
     failNext(op) {
       failing.add(op);
+    },
+    setDown(isDown) {
+      down = isDown;
     },
     pairingCode({ deviceType = "stripe_s700", serialNumber = `STRM${randomBytes(5).toString("hex").toUpperCase()}` } = {}) {
       const code = `${randomBytes(2).toString("hex")}-${randomBytes(2).toString("hex")}-${randomBytes(2).toString("hex")}`;
@@ -433,6 +440,22 @@ export const createFakeStripe = () => {
             return withoutAccount(structuredClone(reader));
           });
         },
+        async retrieve(id, params, options = {}) {
+          calls.push(["terminal.readers.retrieve", id, params, options]);
+          maybeFail("terminal.readers.retrieve");
+          return withoutAccount(structuredClone(terminalObject(readers, "terminal.reader", id, options.stripeAccount)));
+        },
+        // Stops what the reader is doing; Stripe refuses when it is doing nothing.
+        async cancelAction(id, params, options = {}) {
+          calls.push(["terminal.readers.cancelAction", id, params, options]);
+          maybeFail("terminal.readers.cancelAction");
+          const reader = terminalObject(readers, "terminal.reader", id, options.stripeAccount);
+          if (reader.action?.status !== "in_progress") {
+            throw invalidRequest("Reader has no in-progress action to cancel.", { code: "terminal_reader_no_action" });
+          }
+          Object.assign(reader.action, { status: "failed", failure_code: "canceled" });
+          return withoutAccount(structuredClone(reader));
+        },
       },
     },
     testHelpers: {
@@ -568,6 +591,27 @@ export const createFakeStripe = () => {
           captures += 1;
           return withoutAccount(structuredClone(intent));
         });
+      },
+      // Releases the authorization, or stops the PaymentIntent before a card
+      // is read; a reader still asking for its card stops too. Stripe refuses
+      // once it is captured or already cancelled.
+      async cancel(id, params, options = {}) {
+        calls.push(["paymentIntents.cancel", id, params, options]);
+        maybeFail("paymentIntents.cancel");
+        const intent = terminalObject(intents, "payment_intent", id, options.stripeAccount);
+        if (["succeeded", "canceled"].includes(intent.status)) {
+          throw invalidRequest(
+            `You cannot cancel this PaymentIntent because it has a status of ${intent.status}.`,
+            { code: "payment_intent_unexpected_state" }
+          );
+        }
+        Object.assign(intent, { status: "canceled", amount_capturable: 0 });
+        for (const reader of readers.values()) {
+          if (reader.action?.status === "in_progress" && reader.action.process_payment_intent?.payment_intent === id) {
+            Object.assign(reader.action, { status: "failed", failure_code: "canceled" });
+          }
+        }
+        return withoutAccount(structuredClone(intent));
       },
     },
     refunds: {

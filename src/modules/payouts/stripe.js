@@ -401,6 +401,37 @@ export const collectOnCardReader = async ({ stripeAccountId, stripeReaderId, pay
   );
 };
 
+// Stops the reader asking for a card for this PaymentIntent. A reader doing
+// nothing, or by now collecting another PaymentIntent, is left alone.
+export const stopCollectingOnCardReader = async ({ stripeAccountId, stripeReaderId, paymentIntentId }) => {
+  const reader = await client().terminal.readers.retrieve(stripeReaderId, {}, { stripeAccount: stripeAccountId });
+  const action = reader?.action;
+  if (action?.status !== "in_progress" || action.process_payment_intent?.payment_intent !== paymentIntentId) return;
+  try {
+    await client().terminal.readers.cancelAction(stripeReaderId, {}, { stripeAccount: stripeAccountId });
+  } catch (error) {
+    // It finished or stopped between the two calls.
+    if (error?.type === "StripeInvalidRequestError") return;
+    throw error;
+  }
+};
+
+// Cancels a card reader PaymentIntent, releasing any authorization, so it can
+// never be captured. One already cancelled, or not on that account, counts
+// as cancelled.
+export const cancelCardReaderPaymentIntent = async ({ stripeAccountId, paymentIntentId }) => {
+  try {
+    await client().paymentIntents.cancel(paymentIntentId, {}, { stripeAccount: stripeAccountId });
+  } catch (error) {
+    if (error?.type === "StripeInvalidRequestError" && (error.statusCode === 404 || error.code === "resource_missing")) {
+      return;
+    }
+    if (error?.code !== "payment_intent_unexpected_state") throw error;
+    const intent = await client().paymentIntents.retrieve(paymentIntentId, {}, { stripeAccount: stripeAccountId });
+    if (intent.status !== "canceled") throw error;
+  }
+};
+
 // Stripe's test cards (test mode only), by the contract's TestCard names.
 export const TEST_CARD_NUMBERS = {
   APPROVED: "4242424242424242",

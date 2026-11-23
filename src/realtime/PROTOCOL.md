@@ -13,6 +13,7 @@ This release is **2.6**. Clients connect with `/ws?v=2`. A missing `v` defaults 
 - `bill.paid` can carry `method: "CARD_READER"`: Stripe's webhook captured the card and recorded the Payment. The bill is never unfrozen in between.
 - `GET /sessions/:id/bill` has `freeze` (everyone) and `cardReader`, `cardReaderPayment` (staff only).
 - A declined card or a failed reader ends the attempt: `bill.paymentFailed` (staff room only, with `reason` and a staff-readable `message`), then `bill.unfrozen` with `reason: "FAILED"`. `cardReaderPayment` stays on the bill as `FAILED` until a retry or a new start. `POST /sessions/:id/card-reader-payment/retry` freezes the bill again on the same reader.
+- `bill.unfrozen` gains `reason`, for online payments too: `CANCELLED` (staff cancelled the card reader payment, the guest went back from Stripe, or an owner/admin unfroze by hand), `EXPIRED` (no card within 3 min, or the Checkout Session expired), `STAFF_PAYMENT` (staff recorded cash or Card Terminal, or closed the table). `FAILED` (card readers only): a declined card or a failed reader, as above.
 
 ### 2.6
 

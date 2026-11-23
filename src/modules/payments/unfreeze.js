@@ -19,8 +19,11 @@ const payingOnline = () =>
 // the bill unfreezes anyway; a payment that still completes is a Late
 // Payment and is refunded. Without it the failure throws
 // PAYMENT_PROVIDER_ERROR and the bill stays frozen.
+// `reason` is bill.unfrozen's: CANCELLED, or STAFF_PAYMENT for a staff
+// payment or close. A card reader payment is left alone here
+// (cardReaderPaymentEnd.js ends those).
 // Returns { status } of the session afterwards.
-export const unfreezeBill = async (ctx, sessionId, { evenIfStripeFails = false } = {}) => {
+export const unfreezeBill = async (ctx, sessionId, { evenIfStripeFails = false, reason = "CANCELLED" } = {}) => {
   const session = await TableSession.findOne({ _id: sessionId, restaurantId: ctx.restaurantId })
     .select("status paymentInProgress")
     .lean();
@@ -73,7 +76,7 @@ export const unfreezeBill = async (ctx, sessionId, { evenIfStripeFails = false }
     { $set: { status: "open" }, $unset: { paymentInProgress: 1 } }
   );
   if (result.modifiedCount > 0) {
-    publishBillUnfrozen({ restaurantId: ctx.restaurantId, sessionId });
+    publishBillUnfrozen({ restaurantId: ctx.restaurantId, sessionId, reason });
     return { status: "open" };
   }
   const now = await TableSession.findOne({ _id: sessionId, restaurantId: ctx.restaurantId }).select("status").lean();
