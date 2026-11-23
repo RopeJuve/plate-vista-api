@@ -433,6 +433,9 @@ test("after the bill changed, retry checks the new total and takes it on a new P
   assert.notEqual(newIntentId, paymentIntentId);
   assert.equal(fake.paymentIntent(newIntentId).amount, 2900);
   assert.equal((await p.bill()).body.freeze.totalCents, 2900);
+  // The earlier PaymentIntent, for the old total, is not left behind at Stripe.
+  assert.equal(fake.paymentIntent(paymentIntentId).status, "canceled");
+  assert.equal(fake.paymentIntent(newIntentId).status, "requires_payment_method");
 });
 
 test("retry makes a new PaymentIntent when Stripe can no longer use the earlier one", async () => {

@@ -681,6 +681,8 @@ test("a reader that goes offline as it is told to collect is refused, and the bi
   assert.equal(bill.freeze, null);
   assert.equal(bill.cardReaderPayment, null);
   assert.equal(eventsNamed("bill.frozen").length, 0);
+  // The PaymentIntent made for it is not left behind at Stripe.
+  assert.equal(fake.paymentIntent(paymentIntentIdOf()).status, "canceled");
 
   fake.setReaderStatus(stripeReaderNamed(p, "Bar").id, "online");
   assert.equal((await p.start()).status, 200);
@@ -737,7 +739,13 @@ test("a reader Stripe says is busy with something outside Plate Vista is refused
   });
   assert.equal((await p.bill()).body.session.status, "open");
   assert.equal(fake.reader(stripeReaderId).action.process_payment_intent.payment_intent, outside.id);
+  assert.equal(fake.reader(stripeReaderId).action.status, "in_progress");
   assert.equal(eventsNamed("bill.frozen").length, 0);
+  // The PaymentIntent made for this bill is not left behind at Stripe.
+  const ours = callsOf("terminal.readers.processPaymentIntent").at(-1)[2].payment_intent;
+  assert.notEqual(ours, outside.id);
+  assert.equal(fake.paymentIntent(ours).status, "canceled");
+  assert.equal(fake.paymentIntent(outside.id).status, "requires_payment_method");
 });
 
 const CARD_READER_KEYS = ["id", "name", "deviceType", "serialNumber", "status", "simulated", "busyWith", "addedAt"];

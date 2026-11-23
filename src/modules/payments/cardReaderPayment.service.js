@@ -10,6 +10,7 @@ import { findSession } from "../ordering/session.service.js";
 import { isTseActive } from "../tse/tse.service.js";
 import {
   assertTerminalConfigured,
+  cancelCardReaderPaymentIntent,
   collectOnCardReader,
   createCardReaderPaymentIntent,
   isStripeTestMode,
@@ -88,6 +89,13 @@ const offline = () => new AppError("CARD_READER_OFFLINE", "The card reader is of
 
 const busy = (tableNumber) =>
   new AppError("CARD_READER_BUSY", "The card reader is taking another table's payment.", undefined, { tableNumber });
+
+// The error staff get when Stripe refuses the reader; null for other failures.
+const readerRefusal = (error) => {
+  if (error?.code === "terminal_reader_offline") return offline();
+  if (error?.code === "terminal_reader_busy") return busy(null);
+  return null;
+};
 
 // Freezes the open bill at its total for a card reader payment on this
 // reader, or finds the attempt already running on it. With `retry`, it is
@@ -191,10 +199,6 @@ const stripeAccountOf = async (restaurantId) => {
   return restaurant?.payoutAccount?.stripeAccountId;
 };
 
-// Makes the PaymentIntent and tells the reader to collect it. Every Stripe
-// call is keyed by the attempt, so a request that repeats the start, or
-// finishes one that stopped halfway, gets Stripe's one PaymentIntent and
-// one reader request.
 // A retry's earlier PaymentIntent serves again while Stripe still waits for
 // a card on it, for the same amount.
 const stillUsable = async (stripeAccountId, attempt) => {
@@ -205,8 +209,11 @@ const stillUsable = async (stripeAccountId, attempt) => {
   return intent.status === "requires_payment_method" && intent.amountCents === attempt.amountCents;
 };
 
-const sendToReader = async (ctx, sessionId, attempt) => {
-  const stripeAccountId = await stripeAccountOf(ctx.restaurantId);
+// The attempt's PaymentIntent: the one it has, a retry's earlier one that
+// still serves, or a new one. Every Stripe call is keyed by the attempt, so
+// a request that repeats the start, or finishes one that stopped halfway,
+// gets Stripe's one PaymentIntent and one reader request.
+const paymentIntentFor = async (ctx, sessionId, attempt, stripeAccountId) => {
   let paymentIntentId = attempt.paymentIntentId;
   if (!paymentIntentId && attempt.reusablePaymentIntentId && (await stillUsable(stripeAccountId, attempt))) {
     paymentIntentId = attempt.reusablePaymentIntentId;
@@ -228,6 +235,11 @@ const sendToReader = async (ctx, sessionId, attempt) => {
     { _id: sessionId, restaurantId: ctx.restaurantId, "paymentInProgress.attemptId": attempt.attemptId },
     { $set: { "paymentInProgress.paymentIntentId": paymentIntentId } }
   );
+  return paymentIntentId;
+};
+
+// Tells the reader to collect the PaymentIntent.
+const collect = async (ctx, sessionId, attempt, stripeAccountId, paymentIntentId) => {
   await collectOnCardReader({
     stripeAccountId,
     stripeReaderId: attempt.stripeReaderId,
@@ -238,6 +250,19 @@ const sendToReader = async (ctx, sessionId, attempt) => {
     { _id: sessionId, restaurantId: ctx.restaurantId, "paymentInProgress.attemptId": attempt.attemptId },
     { $set: { "paymentInProgress.collecting": true } }
   );
+};
+
+// A PaymentIntent no attempt will use any more is cancelled at Stripe, so
+// none is left behind. Best effort: a failure is only logged.
+const cancelLeftBehind = async (ctx, sessionId, stripeAccountId, paymentIntentId) => {
+  try {
+    await cancelCardReaderPaymentIntent({ stripeAccountId, paymentIntentId });
+  } catch (error) {
+    logger.warn(
+      { restaurantId: String(ctx.restaurantId), sessionId: String(sessionId), paymentIntentId, err: error },
+      "cancelling an unused card reader PaymentIntent failed"
+    );
+  }
 };
 
 // Staff send the bill's whole total to a card reader (ADR-0008). The bill
@@ -282,24 +307,35 @@ const refreshFailedAttemptReader = async (ctx, sessionId) => {
   await withStripeStatus(ctx.restaurantId, restaurant?.payoutAccount, [reader]);
 };
 
+// Sends the attempt to its reader. Only the request that froze the bill
+// unfreezes it on a failure (the other one's request to Stripe may still
+// succeed), and only that one cancels PaymentIntents nobody will use: the
+// one the reader refused, and a retry's earlier one it replaced.
 const takeOnReader = async (ctx, sessionId, { attempt, froze, previous }) => {
   if (!attempt.collecting) {
+    const stripeAccountId = await stripeAccountOf(ctx.restaurantId);
+    let paymentIntentId;
     try {
-      await sendToReader(ctx, sessionId, attempt);
+      paymentIntentId = await paymentIntentFor(ctx, sessionId, attempt, stripeAccountId);
+      await collect(ctx, sessionId, attempt, stripeAccountId, paymentIntentId);
     } catch (error) {
-      // Only the request that froze the bill unfreezes it: the other one's
-      // request to Stripe may still succeed.
       if (froze) await unfreeze(ctx, sessionId, attempt.attemptId, previous);
       // Stripe refuses a reader that is offline, or busy with something we
       // did not start; whatever it is doing is left alone.
-      if (error?.code === "terminal_reader_offline") throw offline();
-      if (error?.code === "terminal_reader_busy") throw busy(null);
+      const refused = readerRefusal(error);
+      if (refused) {
+        if (froze && paymentIntentId) await cancelLeftBehind(ctx, sessionId, stripeAccountId, paymentIntentId);
+        throw refused;
+      }
       logger.error(
         { restaurantId: String(ctx.restaurantId), sessionId: String(sessionId), requestId: ctx.requestId, err: error },
         "starting the card reader payment failed"
       );
       captureException(error);
       throw new AppError("PAYMENT_PROVIDER_ERROR", "The payment provider could not start the card reader payment");
+    }
+    if (froze && previous?.paymentIntentId && previous.paymentIntentId !== paymentIntentId) {
+      await cancelLeftBehind(ctx, sessionId, stripeAccountId, previous.paymentIntentId);
     }
   }
 
