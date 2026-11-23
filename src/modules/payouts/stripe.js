@@ -265,3 +265,104 @@ export const refundOnlinePayment = async ({ stripeAccountId, paymentIntentId, ch
   );
   return { refundId: refund.id };
 };
+
+// Stripe Terminal (ADR-0008). Card readers and their Location live on the
+// restaurant's Payout Account.
+
+// Throws STRIPE_NOT_CONFIGURED unless the server can reach Stripe.
+export const assertTerminalConfigured = () => {
+  client();
+};
+
+// Test mode: the server runs on Stripe test keys, the only place Simulated
+// Readers exist.
+export const isStripeTestMode = () => /^(sk|rk)_test_/.test(process.env.STRIPE_SECRET_KEY || "");
+
+// What Stripe registers to make a Simulated (WisePOS E) Reader.
+const SIMULATED_REGISTRATION_CODE = "simulated-wpe";
+
+// The one Terminal Location a restaurant's readers are registered under, made
+// from its legal address. The idempotency key stops two first readers from
+// making two Locations.
+export const createTerminalLocation = async ({ stripeAccountId, restaurantId, displayName, address }) => {
+  const location = await client().terminal.locations.create(
+    {
+      display_name: displayName,
+      address: {
+        line1: address.street,
+        postal_code: address.zip,
+        city: address.city,
+        country: address.country || "DE",
+      },
+    },
+    { stripeAccount: stripeAccountId, idempotencyKey: `terminal-location-${restaurantId}` }
+  );
+  return location.id;
+};
+
+const toCardReader = (reader) => ({
+  stripeReaderId: reader.id,
+  deviceType: reader.device_type,
+  serialNumber: reader.serial_number,
+  status: reader.status === "online" ? "online" : "offline",
+});
+
+// Stripe refuses a code it does not know, one that expired, or one whose
+// reader is registered already; it names registration_code as the culprit.
+const isRegistrationCodeError = (error) =>
+  error?.type === "StripeInvalidRequestError" && error.param === "registration_code";
+
+// Registers a reader under the Location by the code it shows on screen, or a
+// Simulated Reader when simulated is set (test mode only). Throws
+// CARD_READER_CODE_INVALID with Stripe's reason when Stripe refuses the code.
+export const registerCardReader = async ({ stripeAccountId, locationId, registrationCode, label, simulated = false }) => {
+  try {
+    const reader = await client().terminal.readers.create(
+      {
+        registration_code: simulated ? SIMULATED_REGISTRATION_CODE : registrationCode,
+        label,
+        location: locationId,
+      },
+      { stripeAccount: stripeAccountId }
+    );
+    return toCardReader(reader);
+  } catch (error) {
+    if (!simulated && isRegistrationCodeError(error)) {
+      throw new AppError(
+        "CARD_READER_CODE_INVALID",
+        "The registration code is invalid, expired or already used.",
+        undefined,
+        { reason: error.message }
+      );
+    }
+    throw error;
+  }
+};
+
+// Every reader registered under the Location, with the status Stripe last
+// heard from it.
+export const listCardReaders = async ({ stripeAccountId, locationId }) => {
+  const readers = [];
+  let startingAfter;
+  for (;;) {
+    const page = await client().terminal.readers.list(
+      { location: locationId, limit: 100, ...(startingAfter ? { starting_after: startingAfter } : {}) },
+      { stripeAccount: stripeAccountId }
+    );
+    readers.push(...page.data.map(toCardReader));
+    if (!page.has_more || page.data.length === 0) return readers;
+    startingAfter = page.data[page.data.length - 1].id;
+  }
+};
+
+// Removes a reader from the Payout Account; one already gone counts as removed.
+export const removeCardReader = async ({ stripeAccountId, stripeReaderId }) => {
+  try {
+    await client().terminal.readers.del(stripeReaderId, {}, { stripeAccount: stripeAccountId });
+  } catch (error) {
+    if (error?.type === "StripeInvalidRequestError" && (error.statusCode === 404 || error.code === "resource_missing")) {
+      return;
+    }
+    throw error;
+  }
+};

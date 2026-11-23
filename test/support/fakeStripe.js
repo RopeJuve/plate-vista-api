@@ -10,6 +10,10 @@
 //   fake.refundsCreated();                                // refunds Stripe actually made (idempotent replays not counted)
 //   fake.completeCheckoutSession(id);                     // the guest paid: expiring it now fails as Stripe does
 //   fake.completeCheckoutSession(id, { type: "paypal" }); // ... with these payment_method_details (default: a Visa card)
+//   fake.pairingCode({ deviceType: "stripe_s700" });     // a code a real reader shows on screen; returns it
+//   fake.setReaderStatus(readerId, "offline");           // what the reader reports to Stripe now
+//   fake.readersOn(stripeAccount);                       // readers Stripe has registered on that account
+//   fake.locationsOn(stripeAccount);                     // Terminal Locations on that account
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 class StripeSignatureVerificationError extends Error {
@@ -86,6 +90,29 @@ export const createFakeStripe = () => {
   const refunds = [];
   // Checkout Sessions by id, as Stripe keeps them.
   const checkouts = new Map();
+  // Stripe Terminal: Locations and readers by id, each kept with the account
+  // it lives on, and the pairing codes readers show that are not used yet.
+  const locations = new Map();
+  const readers = new Map();
+  const pairingCodes = new Map();
+
+  const invalidRequest = (message, { param, code, statusCode = 400 } = {}) => {
+    const error = new Error(message);
+    error.type = "StripeInvalidRequestError";
+    error.statusCode = statusCode;
+    if (param) error.param = param;
+    if (code) error.code = code;
+    return error;
+  };
+
+  const terminalObject = (map, kind, id, stripeAccount) => {
+    const found = map.get(id);
+    if (!found || found.stripeAccount !== stripeAccount) {
+      throw invalidRequest(`No such ${kind}: '${id}'`, { code: "resource_missing", statusCode: 404 });
+    }
+    return found;
+  };
+  const withoutAccount = ({ stripeAccount, ...object }) => ({ ...object });
 
   const maybeFail = (op) => {
     if (!failing.delete(op)) return;
@@ -143,6 +170,18 @@ export const createFakeStripe = () => {
     failNext(op) {
       failing.add(op);
     },
+    pairingCode({ deviceType = "stripe_s700", serialNumber = `STRM${randomBytes(5).toString("hex").toUpperCase()}` } = {}) {
+      const code = `${randomBytes(2).toString("hex")}-${randomBytes(2).toString("hex")}-${randomBytes(2).toString("hex")}`;
+      pairingCodes.set(code, { deviceType, serialNumber });
+      return code;
+    },
+    setReaderStatus(id, status) {
+      readers.get(id).status = status;
+    },
+    readersOn: (stripeAccount) =>
+      [...readers.values()].filter((reader) => reader.stripeAccount === stripeAccount).map(withoutAccount),
+    locationsOn: (stripeAccount) =>
+      [...locations.values()].filter((location) => location.stripeAccount === stripeAccount).map(withoutAccount),
     updateAccount(id, fields) {
       store.set(id, { ...account(id), ...fields });
     },
@@ -238,6 +277,80 @@ export const createFakeStripe = () => {
           Object.assign(session, { status: "expired", url: null });
           const { stripeAccount, ...expired } = session;
           return expired;
+        },
+      },
+    },
+    terminal: {
+      locations: {
+        async create(params, options = {}) {
+          calls.push(["terminal.locations.create", params, options]);
+          maybeFail("terminal.locations.create");
+          const key = options.idempotencyKey && `${options.stripeAccount}|${options.idempotencyKey}`;
+          if (key && idempotent.has(key)) return { ...idempotent.get(key) };
+          const location = {
+            id: `tml_${randomBytes(8).toString("hex")}`,
+            object: "terminal.location",
+            display_name: params.display_name,
+            address: { ...params.address },
+          };
+          locations.set(location.id, { ...location, stripeAccount: options.stripeAccount });
+          if (key) idempotent.set(key, location);
+          return { ...location };
+        },
+      },
+      readers: {
+        // Simulated readers ("simulated-wpe") exist only on test keys, which
+        // this fake stands for. Real ones need a pairing code the reader
+        // showed, used once.
+        async create(params, options = {}) {
+          calls.push(["terminal.readers.create", params, options]);
+          maybeFail("terminal.readers.create");
+          terminalObject(locations, "terminal.location", params.location, options.stripeAccount);
+          let device;
+          if (params.registration_code === "simulated-wpe") {
+            device = { deviceType: "simulated_wisepos_e", serialNumber: `SIMULATED-${randomBytes(3).toString("hex")}`, status: "online" };
+          } else {
+            const paired = pairingCodes.get(params.registration_code);
+            if (!paired) {
+              throw invalidRequest(
+                `The registration code "${params.registration_code}" is invalid or has expired.`,
+                { param: "registration_code" }
+              );
+            }
+            if (paired.used) {
+              throw invalidRequest("This reader is already registered.", { param: "registration_code" });
+            }
+            paired.used = true;
+            device = { ...paired, status: "online" };
+          }
+          const reader = {
+            id: `tmr_${randomBytes(8).toString("hex")}`,
+            object: "terminal.reader",
+            label: params.label,
+            device_type: device.deviceType,
+            serial_number: device.serialNumber,
+            status: device.status,
+            location: params.location,
+            action: null,
+          };
+          readers.set(reader.id, { ...reader, stripeAccount: options.stripeAccount });
+          return { ...reader };
+        },
+        async list(params = {}, options = {}) {
+          calls.push(["terminal.readers.list", params, options]);
+          maybeFail("terminal.readers.list");
+          const data = [...readers.values()]
+            .filter((reader) => reader.stripeAccount === options.stripeAccount)
+            .filter((reader) => !params.location || reader.location === params.location)
+            .map(withoutAccount);
+          return { object: "list", data, has_more: false };
+        },
+        async del(id, params, options = {}) {
+          calls.push(["terminal.readers.del", id, params, options]);
+          maybeFail("terminal.readers.del");
+          terminalObject(readers, "terminal.reader", id, options.stripeAccount);
+          readers.delete(id);
+          return { id, object: "terminal.reader", deleted: true };
         },
       },
     },
