@@ -129,7 +129,33 @@ const place = async ({ chargesEnabled = true, tse = true, reader = "simulated" }
     asBar: as(barToken),
     asOwner: as(ownerToken),
     asGuest: as(guestToken),
-    start: (body = { expectedTotalCents: 1450 }) => asWaiter("post", "/card-reader-payment", body),
+    // Starts for 14.50 € on the "Bar" reader unless the body says otherwise.
+    start: (body = {}) => asWaiter("post", "/card-reader-payment", { readerId, expectedTotalCents: 1450, ...body }),
+    // Adds another reader to the restaurant: simulated, or a real one.
+    addReader: async (name, { simulated = true } = {}) => {
+      const res = simulated
+        ? await request(app).post("/api/v1/restaurant/card-readers/simulated")
+          .set("Authorization", `Bearer ${ownerToken}`).send({ name })
+        : await request(app).post("/api/v1/restaurant/card-readers")
+          .set("Authorization", `Bearer ${ownerToken}`).send({ registrationCode: fake.pairingCode(), name });
+      assert.equal(res.status, 201, JSON.stringify(res.body));
+      return res.body.id;
+    },
+    // Another table of the same restaurant with an open bill of 14.50 €.
+    anotherTable: async (tableNumber) => {
+      const other = await Table.create({ restaurantId: restaurant._id, tableNumber, capacity: 2 });
+      const { order: first } = await createOrder(ctx, { clientOrderId: randomUUID(), tableId: String(other._id), items });
+      const otherAs = (token) => (method, path, body) => {
+        const req = request(app)[method](`/api/v1/sessions/${first.sessionId}${path}`).set("Authorization", `Bearer ${token}`);
+        return body === undefined ? req : req.send(body);
+      };
+      const otherWaiter = otherAs(waiterToken);
+      return {
+        sessionId: first.sessionId,
+        start: (body) => otherWaiter("post", "/card-reader-payment", body),
+        bill: () => otherWaiter("get", "/bill"),
+      };
+    },
     bill: (token = waiterToken) => as(token)("get", "/bill"),
     guestBill: () => as(guestToken)("get", "/bill"),
     payments: () => Payment.find({ restaurantId: restaurant._id, sessionId }).lean(),
@@ -503,13 +529,14 @@ test("starting checks the total, the role, the reader and Stripe", async () => {
   const unknownReader = await p.start({ readerId: "6650c0ffee0000000000a001", expectedTotalCents: 1450 });
   assert.equal(unknownReader.status, 404, JSON.stringify(unknownReader.body));
 
-  const guest = await p.asGuest("post", "/card-reader-payment", { expectedTotalCents: 1450 });
+  const body = { readerId: p.readerId, expectedTotalCents: 1450 };
+  const guest = await p.asGuest("post", "/card-reader-payment", body);
   assert.equal(guest.status, 403, JSON.stringify(guest.body));
-  const bar = await p.asBar("post", "/card-reader-payment", { expectedTotalCents: 1450 });
+  const bar = await p.asBar("post", "/card-reader-payment", body);
   assert.equal(bar.status, 200, JSON.stringify(bar.body));
 
   const noReaders = await place({ reader: null });
-  assert.equal((await noReaders.start()).status, 404);
+  assert.equal((await noReaders.start({ readerId: p.readerId })).status, 404);
   assert.equal((await noReaders.bill()).body.session.status, "open");
 });
 
@@ -591,4 +618,176 @@ test("a wrongly signed authorization webhook is refused and captures nothing", a
   assert.equal(res.status, 400);
   assert.equal(fake.captures(), 0);
   assert.equal((await p.payments()).length, 0);
+});
+
+// Choosing a reader and its availability (#95).
+
+const stripeReaderNamed = (p, name) => fake.readersOn(p.stripeAccountId).find((reader) => reader.label === name);
+
+test("starting needs the reader, and a reader of another restaurant is not found; the bill stays open", async () => {
+  const p = await place();
+  const other = await place();
+
+  const missing = await p.asWaiter("post", "/card-reader-payment", { expectedTotalCents: 1450 });
+  assert.equal(missing.status, 400, JSON.stringify(missing.body));
+  assert.equal(missing.body.code, "VALIDATION");
+
+  const foreign = await p.start({ readerId: other.readerId });
+  assert.equal(foreign.status, 404, JSON.stringify(foreign.body));
+  assert.equal((await p.bill()).body.session.status, "open");
+  assert.equal(fake.paymentIntentsCreated(), 0);
+});
+
+test("starting uses the chosen reader", async () => {
+  const p = await place();
+  const terrasse = await p.addReader("Terrasse");
+
+  const res = await p.start({ readerId: terrasse });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.deepEqual(res.body.reader, { id: terrasse, name: "Terrasse", simulated: true });
+  assert.equal(callsOf("terminal.readers.processPaymentIntent")[0][1], stripeReaderNamed(p, "Terrasse").id);
+});
+
+const CARD_READER_OFFLINE = { code: "CARD_READER_OFFLINE", message: "The card reader is offline." };
+
+test("a reader Stripe reports offline is refused before the bill freezes", async () => {
+  const p = await place();
+  fake.setReaderStatus(stripeReaderNamed(p, "Bar").id, "offline");
+
+  const res = await p.start();
+  assert.equal(res.status, 409, JSON.stringify(res.body));
+  assert.deepEqual(res.body, CARD_READER_OFFLINE);
+  const bill = (await p.bill()).body;
+  assert.equal(bill.session.status, "open");
+  assert.equal(bill.freeze, null);
+  assert.equal(fake.paymentIntentsCreated(), 0);
+  assert.equal(eventsNamed("bill.frozen").length, 0);
+});
+
+test("a reader that goes offline as it is told to collect is refused, and the bill ends unfrozen", async () => {
+  const p = await place();
+  // Stripe cannot be asked for the reader's status, so the last known one
+  // (online) lets the start go ahead; the reader request then finds it offline.
+  fake.setReaderStatus(stripeReaderNamed(p, "Bar").id, "offline");
+  fake.failNext("terminal.readers.list");
+
+  const res = await p.start();
+  assert.equal(res.status, 409, JSON.stringify(res.body));
+  assert.deepEqual(res.body, CARD_READER_OFFLINE);
+  const bill = (await p.bill()).body;
+  assert.equal(bill.session.status, "open");
+  assert.equal(bill.freeze, null);
+  assert.equal(bill.cardReaderPayment, null);
+  assert.equal(eventsNamed("bill.frozen").length, 0);
+
+  fake.setReaderStatus(stripeReaderNamed(p, "Bar").id, "online");
+  assert.equal((await p.start()).status, 200);
+});
+
+test("a reader taking another table's payment is refused with that table, and that payment keeps running", async () => {
+  const p = await place();
+  const started = await p.start();
+  assert.equal(started.status, 200, JSON.stringify(started.body));
+  const table5 = await p.anotherTable(5);
+  const callsBefore = fake.calls.length;
+
+  const res = await table5.start({ readerId: p.readerId, expectedTotalCents: 1450 });
+  assert.equal(res.status, 409, JSON.stringify(res.body));
+  assert.deepEqual(res.body, {
+    code: "CARD_READER_BUSY",
+    message: "The card reader is taking another table's payment.",
+    details: { tableNumber: 4 },
+  });
+
+  const other = (await table5.bill()).body;
+  assert.equal(other.session.status, "open");
+  assert.equal(other.freeze, null);
+  // Table 4's payment is untouched: still frozen for it, on the reader, at Stripe.
+  const first = (await p.bill()).body;
+  assert.deepEqual(first.cardReaderPayment, started.body);
+  const stripeReader = fake.reader(stripeReaderNamed(p, "Bar").id);
+  assert.equal(stripeReader.action.status, "in_progress");
+  assert.equal(stripeReader.action.process_payment_intent.payment_intent, paymentIntentIdOf());
+  const written = fake.calls.slice(callsBefore).map(([op]) => op).filter((op) => op !== "terminal.readers.list");
+  assert.deepEqual(written, []);
+  assert.equal(eventsNamed("bill.frozen").length, 1);
+});
+
+test("a reader Stripe says is busy with something outside Plate Vista is refused without a table, and the bill ends unfrozen", async () => {
+  const p = await place();
+  const stripeReaderId = stripeReaderNamed(p, "Bar").id;
+  const outside = await fake.paymentIntents.create(
+    { amount: 500, currency: "eur", payment_method_types: ["card_present"], capture_method: "manual" },
+    { stripeAccount: p.stripeAccountId }
+  );
+  await fake.terminal.readers.processPaymentIntent(
+    stripeReaderId,
+    { payment_intent: outside.id },
+    { stripeAccount: p.stripeAccountId }
+  );
+
+  const res = await p.start();
+  assert.equal(res.status, 409, JSON.stringify(res.body));
+  assert.deepEqual(res.body, {
+    code: "CARD_READER_BUSY",
+    message: "The card reader is taking another table's payment.",
+    details: { tableNumber: null },
+  });
+  assert.equal((await p.bill()).body.session.status, "open");
+  assert.equal(fake.reader(stripeReaderId).action.process_payment_intent.payment_intent, outside.id);
+  assert.equal(eventsNamed("bill.frozen").length, 0);
+});
+
+const CARD_READER_KEYS = ["id", "name", "deviceType", "serialNumber", "status", "simulated", "busyWith", "addedAt"];
+
+test("the pay panel lists the readers with the status Stripe reports now, and offers them while one is online", async () => {
+  const p = await place();
+  const terrasse = await p.addReader("Terrasse", { simulated: false });
+  fake.setReaderStatus(stripeReaderNamed(p, "Terrasse").id, "offline");
+
+  const { cardReader } = (await p.bill()).body;
+  assert.equal(cardReader.state, "OFFERED");
+  assert.equal(cardReader.reason, null);
+  for (const reader of cardReader.readers) assert.deepEqual(Object.keys(reader).sort(), [...CARD_READER_KEYS].sort());
+  assert.deepEqual(
+    cardReader.readers.map(({ id, name, status, busyWith }) => ({ id, name, status, busyWith })),
+    [
+      { id: p.readerId, name: "Bar", status: "online", busyWith: null },
+      { id: terrasse, name: "Terrasse", status: "offline", busyWith: null },
+    ]
+  );
+
+  fake.setReaderStatus(stripeReaderNamed(p, "Terrasse").id, "online");
+  const again = (await p.bill()).body.cardReader;
+  assert.deepEqual(again.readers.map((reader) => reader.status), ["online", "online"]);
+});
+
+test("card reader payment is disabled with NO_READER_AVAILABLE when every reader is offline", async () => {
+  const p = await place();
+  fake.setReaderStatus(stripeReaderNamed(p, "Bar").id, "offline");
+
+  const { cardReader } = (await p.bill()).body;
+  assert.equal(cardReader.state, "DISABLED");
+  assert.equal(cardReader.reason, "NO_READER_AVAILABLE");
+  assert.deepEqual(cardReader.readers.map((reader) => reader.status), ["offline"]);
+});
+
+test("a reader taking a table's payment shows that table, and is not available to other bills", async () => {
+  const p = await place();
+  const table5 = await p.anotherTable(5);
+  assert.equal((await p.start()).status, 200);
+
+  const other = (await table5.bill()).body.cardReader;
+  assert.equal(other.state, "DISABLED");
+  assert.equal(other.reason, "NO_READER_AVAILABLE");
+  assert.deepEqual(other.readers[0].busyWith, { sessionId: p.sessionId, tableNumber: 4 });
+
+  const own = (await p.bill()).body.cardReader;
+  assert.equal(own.reason, "PAYMENT_IN_PROGRESS");
+  assert.deepEqual(own.readers[0].busyWith, { sessionId: p.sessionId, tableNumber: 4 });
+
+  const terrasse = await p.addReader("Terrasse");
+  const withSpare = (await table5.bill()).body.cardReader;
+  assert.equal(withSpare.state, "OFFERED");
+  assert.equal(withSpare.readers.find((reader) => reader.id === terrasse).busyWith, null);
 });
