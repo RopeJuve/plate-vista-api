@@ -404,6 +404,19 @@ export const collectOnCardReader = async ({ stripeAccountId, stripeReaderId, pay
 // Stripe's test cards (test mode only), by the contract's TestCard names.
 export const TEST_CARD_NUMBERS = {
   APPROVED: "4242424242424242",
+  DECLINED: "4000000000000002",
+  INSUFFICIENT_FUNDS: "4000000000009995",
+  LOST_CARD: "4000000000009987",
+  STOLEN_CARD: "4000000000009979",
+  EXPIRED_CARD: "4000000000000069",
+  PROCESSING_ERROR: "4000000000000119",
+};
+
+// A card reader PaymentIntent as Stripe keeps it now: its status, amount and
+// why its last card failed (Stripe's last_payment_error, or null).
+export const retrieveCardReaderPaymentIntent = async ({ stripeAccountId, paymentIntentId }) => {
+  const intent = await client().paymentIntents.retrieve(paymentIntentId, {}, { stripeAccount: stripeAccountId });
+  return { status: intent.status, amountCents: intent.amount, lastPaymentError: intent.last_payment_error ?? null };
 };
 
 // Presents a test card on a Simulated Reader through Stripe's test helpers.

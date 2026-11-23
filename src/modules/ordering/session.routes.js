@@ -12,7 +12,12 @@ import { parseOrThrow } from "../../shared/validate.js";
 import { canPayBillOnline } from "../payouts/payout.service.js";
 import { startOnlinePayment } from "../payments/onlinePayment.service.js";
 import { unfreezeBill } from "../payments/unfreeze.js";
-import { payPanelOf, presentTestCard, startCardReaderPayment } from "../payments/cardReaderPayment.service.js";
+import {
+  payPanelOf,
+  presentTestCard,
+  retryCardReaderPayment,
+  startCardReaderPayment,
+} from "../payments/cardReaderPayment.service.js";
 
 const sessionRouter = express.Router();
 
@@ -161,6 +166,19 @@ sessionRouter.post(
   checkId,
   asyncRoute(async (req, res) => {
     res.status(200).json(await startCardReaderPayment(staffCtx(req), req.params.id, req.body));
+  })
+);
+
+// Any staff member retries the bill's failed card reader payment on the
+// same reader, at the bill's current total.
+sessionRouter.post(
+  "/:id/card-reader-payment/retry",
+  requireAuth,
+  requireRole("employee"),
+  requireTenant,
+  checkId,
+  asyncRoute(async (req, res) => {
+    res.status(200).json(await retryCardReaderPayment(staffCtx(req), req.params.id, req.body));
   })
 );
 
