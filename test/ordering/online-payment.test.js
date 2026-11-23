@@ -256,7 +256,13 @@ test("bill.frozen goes to staff and the session's room", async () => {
   assert.equal(String(frozen[0].restaurantId), String(place.restaurant._id));
   assert.equal(String(frozen[0].sessionId), place.sessionId);
   assert.equal(frozen[0].audience, undefined);
-  assert.deepEqual(frozen[0].message.data, { sessionId: place.sessionId, expiresAt: res.body.expiresAt });
+  assert.deepEqual(frozen[0].message.data, {
+    sessionId: place.sessionId,
+    expiresAt: res.body.expiresAt,
+    kind: "ONLINE",
+    readerName: null,
+    totalCents: 2450,
+  });
 });
 
 test("staff can start the online payment too", async () => {

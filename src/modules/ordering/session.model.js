@@ -2,7 +2,7 @@ import { Schema, model } from "mongoose";
 import { tenantPlugin } from "../../shared/tenantPlugin.js";
 
 // The kinds of payment a bill can be frozen for.
-export const PAYMENT_IN_PROGRESS_KINDS = ["online"];
+export const PAYMENT_IN_PROGRESS_KINDS = ["online", "card_reader"];
 
 const sessionSchema = new Schema(
   {
@@ -29,7 +29,10 @@ const sessionSchema = new Schema(
     // frozen, GLOSSARY.md): its `kind` and that attempt's data. `attemptId`
     // names this start, so the payment provider sees a retry of the same
     // start as the same request. For `online`, Stripe's Checkout Session id
-    // and url arrive after the freeze.
+    // and url arrive after the freeze. For `card_reader`, the reader it was
+    // sent to (with its name as it was then), our id for the attempt (the
+    // contract's CardReaderPayment id), and Stripe's PaymentIntent id, which
+    // arrives after the freeze; `collecting` once the reader was told.
     paymentInProgress: {
       type: new Schema(
         {
@@ -37,7 +40,15 @@ const sessionSchema = new Schema(
           attemptId: { type: String, required: true },
           checkoutSessionId: { type: String },
           url: { type: String },
+          cardReaderPaymentId: { type: Schema.Types.ObjectId },
+          readerId: { type: Schema.Types.ObjectId, ref: "CardReader" },
+          readerName: { type: String },
+          readerSimulated: { type: Boolean },
+          stripeReaderId: { type: String },
+          paymentIntentId: { type: String },
+          collecting: { type: Boolean },
           amountCents: { type: Number, required: true },
+          startedAt: { type: Date },
           expiresAt: { type: Date, required: true },
         },
         { _id: false }

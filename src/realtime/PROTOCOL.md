@@ -6,6 +6,13 @@ This release is **2.6**. Clients connect with `/ws?v=2`. A missing `v` defaults 
 
 ## Changelog
 
+### 2.7 (being built, #92–#96)
+
+- Card reader payments (see [`docs/payments-contract.md`](../../docs/payments-contract.md) → Card reader payments). Each ticket adds its part here; the release line moves to 2.7 when the last one lands.
+- `bill.frozen` gains `kind` (`ONLINE` | `CARD_READER`), `readerName` (`null` for `ONLINE`) and `totalCents`, for online payments too. It is sent when staff start a card reader payment, to the staff room and the session's room.
+- `bill.paid` can carry `method: "CARD_READER"`: Stripe's webhook captured the card and recorded the Payment. The bill is never unfrozen in between.
+- `GET /sessions/:id/bill` has `freeze` (everyone) and `cardReader`, `cardReaderPayment` (staff only).
+
 ### 2.6
 
 - Call waiter. A guest sends `waiter.call`; staff close it with `waiter.dismiss`. New events to the staff room and the session's room: `waiter.called` and `waiter.dismissed`. Open calls are kept in the socket server's memory only (no database): a socket that connects while one is open receives `waiter.called` for it right after it joins, and a server restart forgets them. Closing the session ends its call.
@@ -260,7 +267,7 @@ An unknown `type` is `VALIDATION`. The 11th message within 10 seconds is `RATE_L
 { "type": "event", "event": "bill.paid", "data": { "sessionId": "...", "paymentId": "...", "receiptToken": "...", "method": "CASH|CARD_TERMINAL|ONLINE", "totalCents": 1800 } }
 { "type": "event", "event": "payment.signed", "data": { "paymentId": "...", "receiptToken": "..." } }
 { "type": "event", "event": "payment.signFailed", "data": { "paymentId": "..." } }
-{ "type": "event", "event": "bill.frozen", "data": { "sessionId": "...", "expiresAt": "ISO-8601" } }
+{ "type": "event", "event": "bill.frozen", "data": { "sessionId": "...", "expiresAt": "ISO-8601", "kind": "ONLINE", "readerName": null, "totalCents": 1800 } }
 { "type": "event", "event": "bill.unfrozen", "data": { "sessionId": "..." } }
 { "type": "event", "event": "waiter.called", "data": { "sessionId": "...", "tableId": "...", "tableNumber": 7, "calledAt": "ISO-8601" } }
 { "type": "event", "event": "waiter.dismissed", "data": { "sessionId": "..." } }

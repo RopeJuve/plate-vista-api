@@ -12,6 +12,7 @@ import { parseOrThrow } from "../../shared/validate.js";
 import { canPayBillOnline } from "../payouts/payout.service.js";
 import { startOnlinePayment } from "../payments/onlinePayment.service.js";
 import { unfreezeBill } from "../payments/unfreeze.js";
+import { payPanelOf, presentTestCard, startCardReaderPayment } from "../payments/cardReaderPayment.service.js";
 
 const sessionRouter = express.Router();
 
@@ -30,7 +31,10 @@ sessionRouter.get(
     const bill = await getSessionBill(req.tenant, req.params.id);
     // Staff see it too, for information; only a guest acts on it.
     const canPayOnline = await canPayBillOnline(req.tenant.restaurantId, bill);
-    res.status(200).json({ ...bill, canPayOnline });
+    const payPanel = await payPanelOf(req.tenant.restaurantId, req.params.id, bill, {
+      staff: req.user.role !== "guest",
+    });
+    res.status(200).json({ ...bill, canPayOnline, ...payPanel });
   })
 );
 
@@ -138,6 +142,37 @@ sessionRouter.post(
       { evenIfStripeFails: !isGuest }
     );
     res.status(200).json(result);
+  })
+);
+
+const staffCtx = (req) => ({
+  restaurantId: req.tenant.restaurantId,
+  requestId: req.id,
+  actor: { type: "employee", id: req.user.id, position: req.user.position },
+});
+
+// Any staff member sends the bill's total to a card reader (ADR-0008). Only
+// Stripe's webhook records the Payment.
+sessionRouter.post(
+  "/:id/card-reader-payment",
+  requireAuth,
+  requireRole("employee"),
+  requireTenant,
+  checkId,
+  asyncRoute(async (req, res) => {
+    res.status(200).json(await startCardReaderPayment(staffCtx(req), req.params.id, req.body));
+  })
+);
+
+// Test mode only: taps a Stripe test card on the Simulated Reader.
+sessionRouter.post(
+  "/:id/card-reader-payment/test-card",
+  requireAuth,
+  requireRole("employee"),
+  requireTenant,
+  checkId,
+  asyncRoute(async (req, res) => {
+    res.status(200).json(await presentTestCard(staffCtx(req), req.params.id, req.body));
   })
 );
 

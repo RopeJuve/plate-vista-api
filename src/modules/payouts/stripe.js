@@ -366,3 +366,61 @@ export const removeCardReader = async ({ stripeAccountId, stripeReaderId }) => {
     throw error;
   }
 };
+
+// Card reader payments (ADR-0008): a card-present PaymentIntent on the Payout
+// Account, captured by hand only while its bill is still frozen for it, and
+// handed to the reader to collect. Each call carries an idempotency key from
+// the attempt, so a repeated start is one PaymentIntent and one reader request.
+export const createCardReaderPaymentIntent = async ({
+  stripeAccountId,
+  attemptId,
+  amountCents,
+  applicationFeeCents,
+  metadata,
+}) => {
+  const intent = await client().paymentIntents.create(
+    {
+      amount: amountCents,
+      currency: "eur",
+      payment_method_types: ["card_present"],
+      capture_method: "manual",
+      metadata,
+      ...(applicationFeeCents > 0 ? { application_fee_amount: applicationFeeCents } : {}),
+    },
+    { stripeAccount: stripeAccountId, idempotencyKey: `card-reader-payment-${attemptId}` }
+  );
+  return { paymentIntentId: intent.id };
+};
+
+// Tells the reader to ask for a card for the PaymentIntent.
+export const collectOnCardReader = async ({ stripeAccountId, stripeReaderId, paymentIntentId, attemptId }) => {
+  await client().terminal.readers.processPaymentIntent(
+    stripeReaderId,
+    { payment_intent: paymentIntentId },
+    { stripeAccount: stripeAccountId, idempotencyKey: `card-reader-collect-${attemptId}` }
+  );
+};
+
+// Stripe's test cards (test mode only), by the contract's TestCard names.
+export const TEST_CARD_NUMBERS = {
+  APPROVED: "4242424242424242",
+};
+
+// Presents a test card on a Simulated Reader through Stripe's test helpers.
+export const presentTestCard = async ({ stripeAccountId, stripeReaderId, card }) => {
+  await client().testHelpers.terminal.readers.presentPaymentMethod(
+    stripeReaderId,
+    { type: "card_present", card_present: { number: TEST_CARD_NUMBERS[card] } },
+    { stripeAccount: stripeAccountId }
+  );
+};
+
+// Captures an authorized card reader payment. The key comes from the
+// PaymentIntent, so a redelivered webhook never captures twice.
+export const captureCardReaderPayment = async ({ stripeAccountId, paymentIntentId }) => {
+  await client().paymentIntents.capture(
+    paymentIntentId,
+    {},
+    { stripeAccount: stripeAccountId, idempotencyKey: `card-reader-capture-${paymentIntentId}` }
+  );
+};

@@ -13,6 +13,7 @@ import { findSession, touchSession } from "../ordering/session.service.js";
 import { AppError, isDuplicateKey } from "../../shared/errors.js";
 import { parseOrThrow } from "../../shared/validate.js";
 import { captureException, logger } from "../../shared/logger.js";
+import { captureCardReaderPayment } from "../payouts/stripe.js";
 
 const findReplay = async (restaurantId, sessionId, clientPaymentId, mongoSession) => {
   const query = Payment.findOne({ restaurantId, clientPaymentId });
@@ -168,3 +169,36 @@ export const recordOnlinePayment = async (ctx, sessionId, checkoutSessionId) => 
     throw error;
   }
 };
+
+// Records a card reader payment once Stripe says the card was authorized
+// (ADR-0008). Only the PaymentIntent the bill is frozen for pays it: it is
+// captured right there, while the bill is still frozen, and the Payment's
+// amount is the frozen bill's. The PaymentIntent id is its clientPaymentId,
+// so a repeated event replays without capturing again; the capture's
+// idempotency key covers a transaction that runs twice. Anything else throws
+// NOT_FROZEN_FOR_IT and nothing is captured.
+export const recordCardReaderPayment = (ctx, sessionId, { paymentIntentId, stripeAccountId }) =>
+  payBill(ctx, sessionId, {
+    method: "CARD_READER",
+    clientPaymentId: paymentIntentId,
+    settle: async (bill, mongoSession) => {
+      const session = await TableSession.findOne({ _id: sessionId, restaurantId: ctx.restaurantId })
+        .select("status paymentInProgress")
+        .session(mongoSession)
+        .lean();
+      const attempt = session.paymentInProgress;
+      if (
+        session.status !== "paying" ||
+        attempt?.kind !== "card_reader" ||
+        attempt.paymentIntentId !== paymentIntentId
+      ) {
+        throw new AppError("NOT_FROZEN_FOR_IT", "The bill is not frozen for this card reader payment", 409);
+      }
+      await TableSession.updateOne(
+        { _id: sessionId, restaurantId: ctx.restaurantId },
+        { $set: { status: "open" }, $unset: { paymentInProgress: 1 } }
+      ).session(mongoSession);
+      await captureCardReaderPayment({ stripeAccountId, paymentIntentId });
+      return attempt.amountCents;
+    },
+  });
