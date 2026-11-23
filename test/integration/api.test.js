@@ -95,7 +95,7 @@ test("registering and fetching a user never returns a password field, at any nes
 });
 
 test("protected routes 401 without a token and 403 with the wrong role", async () => {
-  const reg = await registerUser({
+  await registerUser({
     username: "carol5678",
     email: "carol@example.com",
   });

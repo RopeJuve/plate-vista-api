@@ -16,9 +16,6 @@
   "maxParallel": 1,
   "implementIterations": 6,
   "installCommand": null,
-  "verifyCommands": [
-  "find src -name '*.js' -exec node --check {} +",
-  "npm test"
-],
+  "verifyCommands": ["npm run lint", "npm test", "npm run test:integration"],
   "copyToWorktree": []
 }
