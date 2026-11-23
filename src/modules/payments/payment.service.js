@@ -195,7 +195,7 @@ export const recordCardReaderPayment = (ctx, sessionId, { paymentIntentId, strip
         attempt?.kind !== "card_reader" ||
         attempt.paymentIntentId !== paymentIntentId
       ) {
-        throw new AppError("NOT_FROZEN_FOR_IT", "The bill is not frozen for this card reader payment", 409);
+        throw new AppError("NOT_FROZEN_FOR_IT", "The bill is not frozen for this card reader payment");
       }
       await TableSession.updateOne(
         { _id: sessionId, restaurantId: ctx.restaurantId },
