@@ -486,6 +486,29 @@ test("a failure Stripe reported for the earlier try changes nothing once the ret
   assert.equal((await p.bill()).body.session.status, "paying");
 });
 
+test("a failure for the earlier try dated the same second the retry started changes nothing", async () => {
+  const p = await place();
+  assert.equal((await p.start()).status, 200);
+  await tap(p, "DECLINED");
+  const paymentIntentId = lastPaymentIntentId();
+  const declined = paymentFailedEvent(p, paymentIntentId);
+  const readerFailed = actionFailedEvent(p);
+  assert.equal((await deliver(declined)).status, 200);
+  const retried = await retry(p);
+  assert.equal(retried.status, 200, JSON.stringify(retried.body));
+  assert.equal(lastPaymentIntentId(), paymentIntentId);
+  clearPublished();
+
+  // Stripe dates events to the second: both late events tie with the retry's start.
+  const sameSecond = Math.floor(Date.parse(retried.body.startedAt) / 1000);
+  assert.equal((await deliver({ ...declined, id: `evt_${randomUUID()}`, created: sameSecond })).status, 200);
+  assert.equal((await deliver({ ...readerFailed, created: sameSecond })).status, 200);
+  assert.equal(published.length, 0);
+  const bill = (await p.bill()).body;
+  assert.equal(bill.session.status, "paying");
+  assert.deepEqual(bill.cardReaderPayment, retried.body);
+});
+
 test("retry is refused without a failed attempt, for guests, and keeps the failed attempt when Stripe fails", async () => {
   const idle = await place();
   const none = await retry(idle);

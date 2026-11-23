@@ -68,6 +68,17 @@ const reasonOf = async ({ paymentError, readerFailureCode, paymentIntentId }, st
   return fromReaderFailure(readerFailureCode);
 };
 
+// A retry can use the same PaymentIntent again, so a failure event for it
+// may be the earlier try's. Stripe dates events to the second and they carry
+// nothing else that tells the tries apart: on a PaymentIntent used again, a
+// failure dated in or before the second the retry started is the earlier
+// try's. (A card that fails within that same second is missed; the attempt
+// then expires.) A PaymentIntent made for this attempt is only its own.
+const isEarlierTrys = (event, attempt) => {
+  const reused = Boolean(attempt.reusablePaymentIntentId) && attempt.paymentIntentId === attempt.reusablePaymentIntentId;
+  return reused && Boolean(event.created) && event.created <= Math.floor(attempt.startedAt.getTime() / 1000);
+};
+
 // Stripe's `payment_intent.payment_failed` and `terminal.reader.action_failed`:
 // the card was declined or the reader failed. While the bill is still frozen
 // for this PaymentIntent, the attempt ends as FAILED with a reason staff can
@@ -94,9 +105,7 @@ export const failCardReaderAttempt = async (event) => {
     .select("tableId paymentInProgress")
     .lean();
   const attempt = session?.paymentInProgress;
-  // A retry can use the same PaymentIntent again: a failure Stripe reported
-  // before this try started is the earlier try's.
-  if (!attempt || (event.created && event.created < Math.floor(attempt.startedAt.getTime() / 1000))) {
+  if (!attempt || isEarlierTrys(event, attempt)) {
     logger.info(log, "card reader failure for an attempt that has ended; ignored");
     return;
   }
