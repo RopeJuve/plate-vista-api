@@ -382,7 +382,9 @@ export const createCardReaderPaymentIntent = async ({
     {
       amount: amountCents,
       currency: "eur",
-      payment_method_types: ["card_present"],
+      // Since API 2026-09-30 Stripe refuses payment_method_types; this narrows
+      // the account's Dashboard methods to the in-person card one.
+      allowed_payment_method_types: ["card_present"],
       capture_method: "manual",
       metadata,
       ...(applicationFeeCents > 0 ? { application_fee_amount: applicationFeeCents } : {}),

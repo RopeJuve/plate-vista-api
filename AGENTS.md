@@ -13,3 +13,7 @@ Canonical labels, except the `ready-for-human` role uses `needs-human`: `needs-t
 ### Domain docs
 
 Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+### Third-party APIs
+
+Stripe or fiskaly calls: before adding or changing one, read `docs/third-party-apis.md`. Their live APIs are newer than your training data.
