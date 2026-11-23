@@ -1,5 +1,4 @@
 import mongoose from "mongoose";
-import Restaurant from "../restaurants/restaurant.model.js";
 import TableSession from "../ordering/session.model.js";
 import {
   cancelCardReaderPaymentIntent,
@@ -8,6 +7,8 @@ import {
 } from "../payouts/stripe.js";
 import Payment from "./payment.model.js";
 import { recordCardReaderPayment } from "./payment.service.js";
+import { isCardReaderAttempt } from "./billFreeze.js";
+import { STRIPE_ACTOR, stripeAccountOf } from "./stripeContext.js";
 import { captureException, logger } from "../../shared/logger.js";
 
 // The bill a card reader PaymentIntent was made for, from the metadata
@@ -17,8 +18,6 @@ const billOf = (intent) => {
   if (!mongoose.isValidObjectId(restaurantId) || !mongoose.isValidObjectId(sessionId)) return null;
   return { restaurantId, sessionId };
 };
-
-const STRIPE_ACTOR = { type: "system", id: "stripe" };
 
 // Stripe's `payment_intent.amount_capturable_updated`: the card was
 // authorized on the reader. While the bill is still frozen for this
@@ -65,11 +64,9 @@ export const reconcileCardReaderPayment = async (restaurantId, sessionId) => {
   const session = await TableSession.findOne({ _id: sessionId, restaurantId })
     .select("status paymentInProgress.kind paymentInProgress.paymentIntentId")
     .lean();
-  const attempt = session?.paymentInProgress;
-  if (session?.status !== "paying" || attempt?.kind !== "card_reader" || !attempt.paymentIntentId) return false;
-  const { paymentIntentId } = attempt;
-  const restaurant = await Restaurant.findById(restaurantId).select("payoutAccount.stripeAccountId").lean();
-  const stripeAccountId = restaurant?.payoutAccount?.stripeAccountId;
+  if (!isCardReaderAttempt(session) || !session.paymentInProgress.paymentIntentId) return false;
+  const { paymentIntentId } = session.paymentInProgress;
+  const stripeAccountId = await stripeAccountOf(restaurantId);
   const intent = await retrieveCardReaderPaymentIntent({ stripeAccountId, paymentIntentId });
   if (intent.status !== "requires_capture") return false;
   const log = { restaurantId: String(restaurantId), sessionId: String(sessionId), paymentIntentId };

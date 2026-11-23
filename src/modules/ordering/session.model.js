@@ -2,7 +2,8 @@ import { Schema, model } from "mongoose";
 import { tenantPlugin } from "../../shared/tenantPlugin.js";
 
 // The kinds of payment a bill can be frozen for.
-export const PAYMENT_IN_PROGRESS_KINDS = ["online", "card_reader"];
+export const PAYMENT_IN_PROGRESS_KIND = Object.freeze({ ONLINE: "online", CARD_READER: "card_reader" });
+export const PAYMENT_IN_PROGRESS_KINDS = Object.values(PAYMENT_IN_PROGRESS_KIND);
 
 // One attempt to take the bill's payment; see paymentInProgress below.
 const attemptFields = {

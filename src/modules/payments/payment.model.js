@@ -2,7 +2,13 @@ import { randomBytes } from "node:crypto";
 import { Schema, model } from "mongoose";
 import { tenantPlugin } from "../../shared/tenantPlugin.js";
 
-export const PAYMENT_METHODS = ["CASH", "CARD_TERMINAL", "CARD_READER", "ONLINE"];
+export const PAYMENT_METHOD = Object.freeze({
+  CASH: "CASH",
+  CARD_TERMINAL: "CARD_TERMINAL",
+  CARD_READER: "CARD_READER",
+  ONLINE: "ONLINE",
+});
+export const PAYMENT_METHODS = Object.values(PAYMENT_METHOD);
 export const SIGNATURE_STATUSES = ["PENDING", "SIGNED", "FAILED"];
 
 export const newReceiptToken = () => randomBytes(16).toString("hex");

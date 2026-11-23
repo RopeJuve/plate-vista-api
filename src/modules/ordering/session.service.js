@@ -9,8 +9,7 @@ import { captureException, logger } from "../../shared/logger.js";
 import { publish } from "../../realtime/events.js";
 import { serializeOrder, serializeSession } from "./serialize.js";
 import { serializePayment } from "../payments/serialize.js";
-import { unfreezeBill } from "../payments/unfreeze.js";
-import { endCardReaderPayment } from "../payments/cardReaderPaymentEnd.js";
+import { endPaymentInProgress } from "../payments/unfreeze.js";
 import { reconcileBillPayment } from "../payments/reconcile.js";
 
 // Short code guests read to each other at the table. No 0/O or 1/I.
@@ -150,8 +149,7 @@ const unfreezeToClose = async (ctx, sessionId, unpaidReason) => {
   if (unpaidReason === undefined && (await unpaidTotalCents(ctx.restaurantId, sessionId, null)) > 0) {
     throw new AppError("BILL_UNPAID", "The bill is not paid yet");
   }
-  await unfreezeBill(ctx, sessionId, { evenIfStripeFails: true, reason: "STAFF_PAYMENT" });
-  await endCardReaderPayment(ctx, sessionId, { reason: "STAFF_PAYMENT" });
+  await endPaymentInProgress(ctx, sessionId);
 };
 
 // A bill above 0 closes once it is paid; an owner or admin can close it unpaid

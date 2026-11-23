@@ -1,9 +1,16 @@
-import Restaurant from "../restaurants/restaurant.model.js";
 import TableSession from "../ordering/session.model.js";
-import Payment from "./payment.model.js";
+import Payment, { PAYMENT_METHOD } from "./payment.model.js";
 import { cancelCardReaderPaymentIntent, stopCollectingOnCardReader } from "../payouts/stripe.js";
 import { publishBillUnfrozen } from "./events.js";
 import { reconcileCardReaderPayment } from "./cardReaderCapture.service.js";
+import {
+  CARD_READER_ATTEMPT,
+  isCardReaderAttempt,
+  reopenFrozenBill,
+  sessionStatusOf,
+  UNFREEZE_REASON,
+} from "./billFreeze.js";
+import { stripeAccountOf } from "./stripeContext.js";
 import { AppError } from "../../shared/errors.js";
 import { captureException, logger } from "../../shared/logger.js";
 
@@ -14,11 +21,6 @@ import { captureException, logger } from "../../shared/logger.js";
 // does next. Then the reader is cleared and the PaymentIntent cancelled,
 // releasing any authorization; when Stripe cannot be reached that is only
 // logged, and a card that still goes through is cancelled by the webhook.
-
-const stripeAccountOf = async (restaurantId) => {
-  const restaurant = await Restaurant.findById(restaurantId).select("payoutAccount.stripeAccountId").lean();
-  return restaurant?.payoutAccount?.stripeAccountId;
-};
 
 // Clears the reader and cancels the PaymentIntent, best effort.
 const stopOnStripe = async (ctx, sessionId, attempt) => {
@@ -49,9 +51,6 @@ const stopOnStripe = async (ctx, sessionId, attempt) => {
   }
 };
 
-const statusOf = async (ctx, sessionId) =>
-  (await TableSession.findOne({ _id: sessionId, restaurantId: ctx.restaurantId }).select("status").lean()).status;
-
 // The card may have gone through while its webhook never arrived: then it
 // is recorded as the bill's Payment instead of being released. When Stripe
 // cannot be read that is only logged, and the payment ends anyway.
@@ -77,20 +76,19 @@ export const endCardReaderPayment = async (ctx, sessionId, { reason, expiredBy }
     .select("status paymentInProgress")
     .lean();
   if (!session) throw new AppError("NOT_FOUND", "Not found", 404);
+  if (!isCardReaderAttempt(session)) return { status: session.status, ended: false };
   const attempt = session.paymentInProgress;
-  if (session.status !== "paying" || attempt?.kind !== "card_reader") return { status: session.status, ended: false };
-  if (await cardWentThrough(ctx, sessionId)) return { status: await statusOf(ctx, sessionId), ended: false };
+  const notEnded = async () => ({ status: await sessionStatusOf(ctx.restaurantId, sessionId), ended: false });
+  if (await cardWentThrough(ctx, sessionId)) return notEnded();
 
-  const filter = {
-    _id: sessionId,
+  const reopened = await reopenFrozenBill({
     restaurantId: ctx.restaurantId,
-    status: "paying",
-    "paymentInProgress.attemptId": attempt.attemptId,
-  };
-  if (expiredBy) filter["paymentInProgress.expiresAt"] = { $lte: expiredBy };
-  const result = await TableSession.updateOne(filter, { $set: { status: "open" }, $unset: { paymentInProgress: 1 } });
+    sessionId,
+    attemptId: attempt.attemptId,
+    match: expiredBy ? { "paymentInProgress.expiresAt": { $lte: expiredBy } } : {},
+  });
   // The card went through, or something else ended it first.
-  if (result.modifiedCount === 0) return { status: await statusOf(ctx, sessionId), ended: false };
+  if (!reopened) return notEnded();
   await stopOnStripe(ctx, sessionId, attempt);
   publishBillUnfrozen({ restaurantId: ctx.restaurantId, sessionId, reason });
   return { status: "open", ended: true };
@@ -101,12 +99,12 @@ export const endCardReaderPayment = async (ctx, sessionId, { reason, expiredBy }
 // A FAILED attempt kept for Retry (failedCardReaderPayment) is
 // dropped too, so the pay panel shows none.
 export const cancelCardReaderPayment = async (ctx, sessionId) => {
-  const { status, ended } = await endCardReaderPayment(ctx, sessionId, { reason: "CANCELLED" });
+  const { status, ended } = await endCardReaderPayment(ctx, sessionId, { reason: UNFREEZE_REASON.CANCELLED });
   await TableSession.updateOne(
     { _id: sessionId, restaurantId: ctx.restaurantId },
     { $unset: { failedCardReaderPayment: 1 } }
   );
-  if (!ended && (await Payment.exists({ restaurantId: ctx.restaurantId, sessionId, method: "CARD_READER" }))) {
+  if (!ended && (await Payment.exists({ restaurantId: ctx.restaurantId, sessionId, method: PAYMENT_METHOD.CARD_READER }))) {
     throw new AppError("BILL_PAID", "This bill is paid");
   }
   return { status };
@@ -115,11 +113,7 @@ export const cancelCardReaderPayment = async (ctx, sessionId) => {
 // Ends every card reader payment, across restaurants, that nobody finished
 // by its expiresAt, with reason EXPIRED. Returns how many it ended.
 export const expireCardReaderPayments = async ({ now = new Date(), limit = 50 } = {}) => {
-  const due = await TableSession.find({
-    status: "paying",
-    "paymentInProgress.kind": "card_reader",
-    "paymentInProgress.expiresAt": { $lte: now },
-  })
+  const due = await TableSession.find({ ...CARD_READER_ATTEMPT, "paymentInProgress.expiresAt": { $lte: now } })
     .select("restaurantId")
     .limit(limit)
     .setOptions({ skipTenant: true })
@@ -128,7 +122,11 @@ export const expireCardReaderPayments = async ({ now = new Date(), limit = 50 } 
   for (const session of due) {
     const ctx = { restaurantId: session.restaurantId, requestId: "card-reader-expiry" };
     try {
-      if ((await endCardReaderPayment(ctx, session._id, { reason: "EXPIRED", expiredBy: now })).ended) ended += 1;
+      const { ended: expired } = await endCardReaderPayment(ctx, session._id, {
+        reason: UNFREEZE_REASON.EXPIRED,
+        expiredBy: now,
+      });
+      if (expired) ended += 1;
     } catch (error) {
       logger.error({ sessionId: String(session._id), err: error }, "expiring a card reader payment failed");
       captureException(error);

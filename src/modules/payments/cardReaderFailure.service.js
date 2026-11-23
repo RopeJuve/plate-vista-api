@@ -1,6 +1,7 @@
 import Restaurant from "../restaurants/restaurant.model.js";
 import TableSession from "../ordering/session.model.js";
-import Table from "../tables/table.model.js";
+import { tableNumbersOf } from "../tables/tableNumbers.js";
+import { CARD_READER_ATTEMPT, reopenFrozenBill, UNFREEZE_REASON } from "./billFreeze.js";
 import { retrieveCardReaderPaymentIntent } from "../payouts/stripe.js";
 import { publishBillPaymentFailed, publishBillUnfrozen } from "./events.js";
 import { captureException, logger } from "../../shared/logger.js";
@@ -98,8 +99,7 @@ export const failCardReaderAttempt = async (event) => {
   const restaurantId = restaurant._id;
   const session = await TableSession.findOne({
     restaurantId,
-    status: "paying",
-    "paymentInProgress.kind": "card_reader",
+    ...CARD_READER_ATTEMPT,
     "paymentInProgress.paymentIntentId": failed.paymentIntentId,
   })
     .select("tableId paymentInProgress")
@@ -110,26 +110,25 @@ export const failCardReaderAttempt = async (event) => {
     return;
   }
 
-  const why = await reasonOf(failed, event.account, log);
+  const failure = await reasonOf(failed, event.account, log);
   const failedAt = new Date();
-  const result = await TableSession.updateOne(
-    { _id: session._id, restaurantId, status: "paying", "paymentInProgress.attemptId": attempt.attemptId },
-    {
-      $set: { status: "open", failedCardReaderPayment: { ...attempt, failure: why, failedAt } },
-      $unset: { paymentInProgress: 1 },
-    }
-  );
-  if (result.modifiedCount === 0) return;
+  const reopened = await reopenFrozenBill({
+    restaurantId,
+    sessionId: session._id,
+    attemptId: attempt.attemptId,
+    set: { failedCardReaderPayment: { ...attempt, failure, failedAt } },
+  });
+  if (!reopened) return;
 
-  const table = await Table.findOne({ _id: session.tableId, restaurantId }).select("tableNumber").lean();
+  const tableNumbers = await tableNumbersOf(restaurantId, [session.tableId]);
   publishBillPaymentFailed({
     restaurantId,
     sessionId: session._id,
-    tableNumber: table?.tableNumber ?? null,
+    tableNumber: tableNumbers.get(String(session.tableId)) ?? null,
     readerName: attempt.readerName,
     amountCents: attempt.amountCents,
-    failure: why,
+    failure,
     failedAt,
   });
-  publishBillUnfrozen({ restaurantId, sessionId: session._id, reason: "FAILED" });
+  publishBillUnfrozen({ restaurantId, sessionId: session._id, reason: UNFREEZE_REASON.FAILED });
 };

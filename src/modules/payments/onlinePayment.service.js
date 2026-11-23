@@ -19,6 +19,8 @@ import { publishBillFrozen, publishBillUnfrozen } from "./events.js";
 import { isRefunded, refundLatePayment } from "./latePayment.service.js";
 import { AppError } from "../../shared/errors.js";
 import { captureException, logger } from "../../shared/logger.js";
+import { STRIPE_ACTOR, stripeAccountOf } from "./stripeContext.js";
+import { UNFREEZE_REASON } from "./billFreeze.js";
 
 // Stripe's shortest Checkout Session. Stripe counts it from when it creates
 // the Checkout Session, a moment after the bill froze; the margin keeps the
@@ -158,7 +160,6 @@ const billOf = (checkout) => {
   return { restaurantId, sessionId };
 };
 
-const STRIPE_ACTOR = { type: "system", id: "stripe" };
 
 // Keeps how the guest paid (card, wallet, PayPal, ...) on the Payment for the
 // receipt. Best effort: the payment stands without it, and the receipt then
@@ -240,7 +241,7 @@ export const expireOnlinePayment = async (event) => {
     },
     { $set: { status: "open" }, $unset: { paymentInProgress: 1 } }
   );
-  if (result.modifiedCount > 0) publishBillUnfrozen({ ...bill, reason: "EXPIRED" });
+  if (result.modifiedCount > 0) publishBillUnfrozen({ ...bill, reason: UNFREEZE_REASON.EXPIRED });
 };
 
 // The bill is frozen for a Checkout Session the guest may have paid while the
@@ -258,8 +259,7 @@ export const reconcileOnlinePayment = async (restaurantId, sessionId) => {
   const attempt = session?.paymentInProgress;
   const checkoutSessionId = attempt?.kind === "online" ? attempt.checkoutSessionId : undefined;
   if (session?.status !== "paying" || !checkoutSessionId) return false;
-  const restaurant = await Restaurant.findById(restaurantId).select("payoutAccount.stripeAccountId").lean();
-  const stripeAccountId = restaurant?.payoutAccount?.stripeAccountId;
+  const stripeAccountId = await stripeAccountOf(restaurantId);
   const checkout = await retrieveOnlinePaymentCheckout({ stripeAccountId, checkoutSessionId });
   if (checkout?.status !== "complete" || checkout.payment_status !== "paid") return false;
   logger.warn(

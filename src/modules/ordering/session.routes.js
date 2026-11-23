@@ -13,11 +13,11 @@ import { canPayBillOnline } from "../payouts/payout.service.js";
 import { startOnlinePayment } from "../payments/onlinePayment.service.js";
 import { unfreezeBill } from "../payments/unfreeze.js";
 import {
-  payPanelOf,
   presentTestCard,
   retryCardReaderPayment,
   startCardReaderPayment,
 } from "../payments/cardReaderPayment.service.js";
+import { payPanelOf } from "../payments/cardReaderPayPanel.js";
 import { cancelCardReaderPayment } from "../payments/cardReaderPaymentEnd.js";
 
 const sessionRouter = express.Router();
