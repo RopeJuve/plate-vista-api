@@ -13,6 +13,7 @@ Canonical labels, except the `ready-for-human` role uses `needs-human`: `needs-t
 ### Domain docs
 
 Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+Review rules that need judgement (contract, Glossary, ADRs, error codes): `CODING_STANDARDS.md`.
 
 ### Third-party APIs
 
