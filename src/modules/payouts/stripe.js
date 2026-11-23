@@ -415,6 +415,41 @@ export const presentTestCard = async ({ stripeAccountId, stripeReaderId, card })
   );
 };
 
+// What a card receipt needs about a card taken on a reader, from a
+// PaymentIntent whose latest_charge is expanded; null without a card-present
+// charge. Only these fields are kept: never the PAN, expiry, cardholder
+// name, cryptogram or anything else Stripe sends about the card.
+export const cardPresentDetailsOf = (intent) => {
+  const charge = intent && typeof intent.latest_charge === "object" ? intent.latest_charge : null;
+  const method = charge?.payment_method_details;
+  if (method?.type !== "card_present" || !method.card_present) return null;
+  const card = method.card_present;
+  const details = {
+    type: "card_present",
+    brand: card.brand,
+    last4: card.last4,
+    funding: card.funding,
+    authorizationCode: card.receipt?.authorization_code,
+    aid: card.receipt?.dedicated_file_name,
+    applicationLabel: card.receipt?.application_preferred_name,
+    readMethod: card.read_method,
+    paymentIntentId: intent.id,
+    authorizedAt: fromUnix(charge.created),
+  };
+  return Object.fromEntries(Object.entries(details).filter(([, value]) => value != null && value !== ""));
+};
+
+// The card-present details of a card reader PaymentIntent on the restaurant's
+// Payout Account (cardPresentDetailsOf); null when it has no such charge.
+export const retrieveCardReaderPaymentDetails = async ({ stripeAccountId, paymentIntentId }) =>
+  cardPresentDetailsOf(
+    await client().paymentIntents.retrieve(
+      paymentIntentId,
+      { expand: ["latest_charge"] },
+      { stripeAccount: stripeAccountId }
+    )
+  );
+
 // Captures an authorized card reader payment. The key comes from the
 // PaymentIntent, so a redelivered webhook never captures twice.
 export const captureCardReaderPayment = async ({ stripeAccountId, paymentIntentId }) => {

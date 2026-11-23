@@ -6,7 +6,7 @@ import Restaurant from "../restaurants/restaurant.model.js";
 
 const asId = (value) => new mongoose.Types.ObjectId(String(value));
 
-const parseDateRange = (startDate, endDate) => {
+export const parseDateRange = (startDate, endDate) => {
   if (Boolean(startDate) !== Boolean(endDate)) {
     return { error: "start_date and end_date must both be provided or both omitted" };
   }

@@ -10,6 +10,7 @@ import {
   getTotalSales,
   getUserOrders,
 } from "../ordering/order.stats.js";
+import { getSalesByPaymentMethod } from "../payments/payment.stats.js";
 
 const statisticsRouter = express.Router();
 
@@ -34,6 +35,10 @@ statisticsRouter.get("/sales/categories", asyncRoute(async (req, res) => {
 
 statisticsRouter.get("/sales/menu-items", asyncRoute(async (req, res) => {
   send(res, await getSalesByMenuItem(req.tenant.restaurantId, req.query));
+}));
+
+statisticsRouter.get("/sales/payment-methods", asyncRoute(async (req, res) => {
+  send(res, await getSalesByPaymentMethod(req.tenant.restaurantId, req.query));
 }));
 
 statisticsRouter.get("/orders/by-date", asyncRoute(async (req, res) => {

@@ -14,7 +14,8 @@
 //   fake.setReaderStatus(readerId, "offline");           // what the reader reports to Stripe now
 //   fake.readersOn(stripeAccount);                       // readers Stripe has registered on that account
 //   fake.locationsOn(stripeAccount);                     // Terminal Locations on that account
-//   fake.paymentIntent(id);                              // a PaymentIntent as Stripe keeps it now (for webhook events)
+//   fake.paymentIntent(id);                              // a PaymentIntent as Stripe keeps it now (for webhook events; latest_charge is an id)
+//   fake.charge(id);                                     // a charge as Stripe keeps it now
 //   fake.paymentIntentsCreated();                        // PaymentIntents Stripe actually made (replays not counted)
 //   fake.readerRequests();                               // reader actions Stripe actually started (replays not counted)
 //   fake.captures();                                     // captures Stripe actually made (replays not counted)
@@ -134,6 +135,12 @@ export const createFakeStripe = () => {
     return found;
   };
   const withoutAccount = ({ stripeAccount, ...object }) => ({ ...object });
+  // Stripe sends a PaymentIntent's latest_charge as its id unless it is expanded.
+  const unexpanded = (intent, params) => {
+    const copy = withoutAccount(structuredClone(intent));
+    if (copy.latest_charge && !params?.expand?.includes("latest_charge")) copy.latest_charge = copy.latest_charge.id;
+    return copy;
+  };
 
   const maybeFail = (op) => {
     if (!failing.delete(op)) return;
@@ -199,7 +206,11 @@ export const createFakeStripe = () => {
     setReaderStatus(id, status) {
       readers.get(id).status = status;
     },
-    paymentIntent: (id) => withoutAccount(structuredClone(intents.get(id))),
+    paymentIntent: (id) => unexpanded(intents.get(id)),
+    charge: (id) => {
+      const intent = [...intents.values()].find((found) => found.latest_charge?.id === id);
+      return intent ? structuredClone(intent.latest_charge) : undefined;
+    },
     paymentIntentsCreated: () => intentsCreated,
     readerRequests: () => readerRequests,
     captures: () => captures,
@@ -429,13 +440,33 @@ export const createFakeStripe = () => {
                 created: Math.floor(Date.now() / 1000),
                 payment_method_details: {
                   type: "card_present",
+                  // As Stripe sends it, with fields Plate Vista must not keep.
                   card_present: {
                     brand: "visa",
-                    last4: String(params.card_present?.number || "4242424242424242").slice(-4),
+                    brand_product: "F",
+                    cardholder_name: "TEST/CARD",
+                    country: "US",
+                    emv_auth_data: "8A023030",
+                    exp_month: 12,
+                    exp_year: 2030,
+                    fingerprint: "fp_test_card",
                     funding: "credit",
-                    authorization_code: "123456",
+                    generated_card: "pm_generated_card",
+                    last4: String(params.card_present?.number || "4242424242424242").slice(-4),
+                    network: "visa",
+                    network_transaction_id: "nti_test",
                     read_method: "contactless_emv",
-                    receipt: { application_preferred_name: "VISA CREDIT", dedicated_file_name: "A0000000031010" },
+                    receipt: {
+                      account_type: "credit",
+                      application_cryptogram: "1A2B3C4D5E6F7A8B",
+                      application_preferred_name: "VISA CREDIT",
+                      authorization_code: "123456",
+                      authorization_response_code: "3030",
+                      cardholder_verification_method: "none",
+                      dedicated_file_name: "A0000000031010",
+                      terminal_verification_results: "0000000000",
+                      transaction_status_information: "0000",
+                    },
                   },
                 },
               },
@@ -473,7 +504,7 @@ export const createFakeStripe = () => {
       async retrieve(id, params, options = {}) {
         calls.push(["paymentIntents.retrieve", id, params, options]);
         maybeFail("paymentIntents.retrieve");
-        return withoutAccount(structuredClone(terminalObject(intents, "payment_intent", id, options.stripeAccount)));
+        return unexpanded(terminalObject(intents, "payment_intent", id, options.stripeAccount), params);
       },
       // Stripe captures only an authorized PaymentIntent.
       async capture(id, params, options = {}) {

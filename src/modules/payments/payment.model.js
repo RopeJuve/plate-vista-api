@@ -34,8 +34,10 @@ const tseSchema = new Schema(
 
 // How the guest paid by card (or wallet, PayPal, ...), as Stripe saw it, kept
 // when a payment the provider records is recorded, so the receipt never has
-// to ask Stripe. `type` is Stripe's payment method type (card, paypal,
-// klarna, ...); the card fields only for cards.
+// to ask Stripe. `type` is Stripe's payment method type (card, card_present,
+// paypal, klarna, ...); the card fields only for cards, and aid,
+// applicationLabel and readMethod only for a card taken on a card reader.
+// Nothing else about the card is kept.
 const cardDetailsSchema = new Schema(
   {
     type: { type: String, required: true },
@@ -44,6 +46,9 @@ const cardDetailsSchema = new Schema(
     funding: { type: String },
     wallet: { type: String },
     authorizationCode: { type: String },
+    aid: { type: String },
+    applicationLabel: { type: String },
+    readMethod: { type: String },
     paymentIntentId: { type: String },
     authorizedAt: { type: Date },
   },
