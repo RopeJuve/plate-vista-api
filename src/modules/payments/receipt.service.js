@@ -8,7 +8,7 @@ import { mergeReceiptLines, totalsByVat } from "./money.js";
 import { AppError } from "../../shared/errors.js";
 import { toIso as iso } from "../../shared/iso.js";
 import { captureException, logger } from "../../shared/logger.js";
-import { reconcileOnlinePayment } from "./onlinePayment.service.js";
+import { reconcileBillPayment } from "./reconcile.js";
 import { serializePaymentDetails } from "./serialize.js";
 
 const RECEIPT_TOKEN_PATTERN = /^[0-9a-f]{32}$/;
@@ -109,7 +109,7 @@ export const getReceipt = async (receiptToken) => {
 };
 
 // What the guest's app polls after paying: the receipt token once the bill
-// has a payment, or PAYING while an online payment is still in progress.
+// has a payment, or PAYING while an online or card reader payment is in progress.
 // Works after the session is closed, so a guest can still find their receipt.
 // While paying, Stripe is asked too, so a payment whose webhook never came
 // is still recorded and the guest gets their receipt.
@@ -122,14 +122,14 @@ export const getReceiptTokenForSession = async (restaurantId, sessionId) => {
   const session = await TableSession.findOne({ _id: sessionId, restaurantId }).select("status").lean();
   if (session?.status !== "paying") throw notFound();
   try {
-    if (await reconcileOnlinePayment(restaurantId, sessionId)) {
+    if (await reconcileBillPayment(restaurantId, sessionId)) {
       const recorded = await findReceiptToken(restaurantId, sessionId);
       if (recorded) return { receiptToken: recorded.receiptToken };
     }
   } catch (error) {
     // Stripe unreachable or not set up: keep answering PAYING; the guest asks again.
     if (error?.code !== "STRIPE_NOT_CONFIGURED") {
-      logger.error({ restaurantId: String(restaurantId), sessionId: String(sessionId), err: error }, "checking the online payment with Stripe failed");
+      logger.error({ restaurantId: String(restaurantId), sessionId: String(sessionId), err: error }, "checking the payment with Stripe failed");
       captureException(error);
     }
   }

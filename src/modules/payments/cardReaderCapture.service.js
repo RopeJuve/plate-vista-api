@@ -1,5 +1,11 @@
 import mongoose from "mongoose";
-import { cancelCardReaderPaymentIntent, retrieveCardReaderPaymentDetails } from "../payouts/stripe.js";
+import Restaurant from "../restaurants/restaurant.model.js";
+import TableSession from "../ordering/session.model.js";
+import {
+  cancelCardReaderPaymentIntent,
+  retrieveCardReaderPaymentDetails,
+  retrieveCardReaderPaymentIntent,
+} from "../payouts/stripe.js";
 import Payment from "./payment.model.js";
 import { recordCardReaderPayment } from "./payment.service.js";
 import { captureException, logger } from "../../shared/logger.js";
@@ -46,6 +52,39 @@ export const captureCardReaderAuthorization = async (event) => {
     await cancelCardReaderPaymentIntent({ stripeAccountId: event.account, paymentIntentId: intent.id });
   }
   await keepCardPresentDetails(recorded?.payment, event.account, log);
+};
+
+// The bill is frozen for a card reader payment whose card may have gone
+// through while the authorization webhook never arrived (not set up, not
+// forwarded to this server, or still on its way). Asks Stripe, and when the
+// PaymentIntent is authorized captures and records it exactly as the webhook
+// would: through recordCardReaderPayment, the PaymentIntent id being the
+// Payment's clientPaymentId, so the webhook coming later replays. Returns
+// true when it is now recorded; false otherwise. Stripe failures throw.
+export const reconcileCardReaderPayment = async (restaurantId, sessionId) => {
+  const session = await TableSession.findOne({ _id: sessionId, restaurantId })
+    .select("status paymentInProgress.kind paymentInProgress.paymentIntentId")
+    .lean();
+  const attempt = session?.paymentInProgress;
+  if (session?.status !== "paying" || attempt?.kind !== "card_reader" || !attempt.paymentIntentId) return false;
+  const { paymentIntentId } = attempt;
+  const restaurant = await Restaurant.findById(restaurantId).select("payoutAccount.stripeAccountId").lean();
+  const stripeAccountId = restaurant?.payoutAccount?.stripeAccountId;
+  const intent = await retrieveCardReaderPaymentIntent({ stripeAccountId, paymentIntentId });
+  if (intent.status !== "requires_capture") return false;
+  const log = { restaurantId: String(restaurantId), sessionId: String(sessionId), paymentIntentId };
+  logger.warn(log, "card reader payment authorized on Stripe but not recorded; recording it without the webhook");
+  const ctx = { restaurantId, requestId: `reconcile:${paymentIntentId}`, actor: STRIPE_ACTOR };
+  let recorded;
+  try {
+    recorded = await recordCardReaderPayment(ctx, sessionId, { paymentIntentId, stripeAccountId });
+  } catch (error) {
+    // Something else ended the attempt just now; the webhook settles the card.
+    if (["NOT_FROZEN_FOR_IT", "BILL_PAID"].includes(error?.code)) return false;
+    throw error;
+  }
+  await keepCardPresentDetails(recorded.payment, stripeAccountId, log);
+  return true;
 };
 
 // Keeps what the card receipt needs (brand, last 4, authorization code, AID,
