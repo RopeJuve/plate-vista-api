@@ -130,6 +130,15 @@ const place = async ({ chargesEnabled = true, tse = true, reader = "simulated" }
     asOwner: as(ownerToken),
     asGuest: as(guestToken),
     start: (body = {}) => asWaiter("post", "/card-reader-payment", { readerId, expectedTotalCents: 1450, ...body }),
+    // Another table of the same restaurant, with an open bill of 14.50 €, starting on the "Bar" reader.
+    startAnotherTable: async (tableNumber) => {
+      const other = await Table.create({ restaurantId: restaurant._id, tableNumber, capacity: 2 });
+      const { order: first } = await createOrder(ctx, { clientOrderId: randomUUID(), tableId: String(other._id), items });
+      return request(app)
+        .post(`/api/v1/sessions/${first.sessionId}/card-reader-payment`)
+        .set("Authorization", `Bearer ${waiterToken}`)
+        .send({ readerId, expectedTotalCents: 1450 });
+    },
     bill: (token = waiterToken) => as(token)("get", "/bill"),
     guestBill: () => as(guestToken)("get", "/bill"),
     payments: () => Payment.find({ restaurantId: restaurant._id, sessionId }).lean(),
@@ -507,6 +516,65 @@ test("a failure for the earlier try dated the same second the retry started chan
   const bill = (await p.bill()).body;
   assert.equal(bill.session.status, "paying");
   assert.deepEqual(bill.cardReaderPayment, retried.body);
+});
+
+// Refused: the bill ends open, still showing the failed attempt, and nothing froze.
+const assertRetryRefused = async (p, res, failedBefore, body) => {
+  assert.equal(res.status, 409, JSON.stringify(res.body));
+  assert.deepEqual(res.body, body);
+  const bill = (await p.bill()).body;
+  assert.equal(bill.session.status, "open");
+  assert.equal(bill.freeze, null);
+  assert.deepEqual(bill.cardReaderPayment, failedBefore);
+  assert.equal(eventsNamed("bill.frozen").filter((e) => e.message.data.sessionId === p.sessionId).length, 0);
+};
+
+test("retry on a reader now taking another table's payment is refused with that table", async () => {
+  const p = await place();
+  await startAndDecline(p);
+  const failedBefore = (await p.bill()).body.cardReaderPayment;
+  assert.equal((await p.startAnotherTable(5)).status, 200);
+  clearPublished();
+
+  await assertRetryRefused(p, await retry(p), failedBefore, {
+    code: "CARD_READER_BUSY",
+    message: "The card reader is taking another table's payment.",
+    details: { tableNumber: 5 },
+  });
+});
+
+test("retry on a reader Stripe reports offline is refused before the bill freezes", async () => {
+  const p = await place();
+  await startAndDecline(p);
+  const failedBefore = (await p.bill()).body.cardReaderPayment;
+  fake.setReaderStatus(readerOf(p), "offline");
+  clearPublished();
+  const requestsBefore = fake.readerRequests();
+
+  await assertRetryRefused(p, await retry(p), failedBefore, {
+    code: "CARD_READER_OFFLINE",
+    message: "The card reader is offline.",
+  });
+  assert.equal(fake.readerRequests(), requestsBefore);
+});
+
+test("retry on a reader that goes offline as it is told to collect is refused, and the bill ends unfrozen", async () => {
+  const p = await place();
+  await startAndDecline(p);
+  const failedBefore = (await p.bill()).body.cardReaderPayment;
+  // Stripe cannot be asked for the reader's status, so the last known one
+  // (online) lets the retry go ahead; the reader request then finds it offline.
+  fake.setReaderStatus(readerOf(p), "offline");
+  fake.failNext("terminal.readers.list");
+  clearPublished();
+
+  await assertRetryRefused(p, await retry(p), failedBefore, {
+    code: "CARD_READER_OFFLINE",
+    message: "The card reader is offline.",
+  });
+
+  fake.setReaderStatus(readerOf(p), "online");
+  assert.equal((await retry(p)).status, 200);
 });
 
 test("retry is refused without a failed attempt, for guests, and keeps the failed attempt when Stripe fails", async () => {
