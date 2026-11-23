@@ -301,6 +301,25 @@ test("an account event with a wrong or missing signature is refused with 400", a
   assert.equal(stored.chargesEnabled, false);
 });
 
+// A destination with the wrong payload style for its route: the setup is
+// wrong, so say which way round it should be, signed or not.
+test("a thin event on the snapshot route, or a snapshot event on the accounts route, is refused with 400 STRIPE_WEBHOOK_WRONG_PAYLOAD", async () => {
+  const thinOnSnapshotRoute = await deliver(accountEvent("acct_nobody", "v1.payment_intent.amount_capturable_updated"));
+  assert.equal(thinOnSnapshotRoute.status, 400);
+  assert.equal(thinOnSnapshotRoute.body.code, "STRIPE_WEBHOOK_WRONG_PAYLOAD");
+  assert.match(thinOnSnapshotRoute.body.message, /snapshot/);
+
+  const snapshotOnAccountsRoute = await deliverAccountEvent({
+    id: `evt_${randomUUID()}`,
+    object: "event",
+    type: "payment_intent.amount_capturable_updated",
+    data: { object: {} },
+  });
+  assert.equal(snapshotOnAccountsRoute.status, 400);
+  assert.equal(snapshotOnAccountsRoute.body.code, "STRIPE_WEBHOOK_WRONG_PAYLOAD");
+  assert.match(snapshotOnAccountsRoute.body.message, /thin/);
+});
+
 test("account events for an unknown account or other objects, and unknown snapshot events, are acknowledged", async () => {
   const unknownAccount = await deliverAccountEvent(accountEvent("acct_nobody"));
   assert.equal(unknownAccount.status, 200);
