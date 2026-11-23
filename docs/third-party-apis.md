@@ -15,6 +15,14 @@ Stripe and fiskaly change their APIs faster than an agent's training data, so a 
 - **API version:** the `stripe` package fixes it, and we don't override it. It's in `node_modules/stripe/cjs/apiVersion.js` (`2026-10-28.endive` as of stripe 23.1). Upgrading the package changes the API version, so read the changelog for every version in between.
 - **Known break:** this API version refuses `payment_method_types` on PaymentIntents, SetupIntents and Checkout Sessions. Terminal PaymentIntents use `allowed_payment_method_types: ["card_present"]`.
 - **Contract test:** `test/stripe/stripe-contract.test.js` runs our real calls against Stripe test mode, with a Simulated Reader for Terminal. It runs through `npm run test:stripe`, which reads `.env`, and skips without a test-mode `STRIPE_SECRET_KEY` and `STRIPE_TEST_ACCOUNT_ID`. CI runs it with the `STRIPE_TEST_SECRET_KEY` and `STRIPE_TEST_ACCOUNT_ID` repo secrets. Give every new call in `stripe.js` a case there.
+- **Webhooks:** two event destinations, set up by hand in the Dashboard once per mode, each with its own signing secret:
+
+  | Route | Payload | Events | Secret |
+  |---|---|---|---|
+  | `POST /api/v1/webhooks/stripe` | **snapshot**, API version as above | `checkout.session.completed`, `checkout.session.expired`, `payment_intent.amount_capturable_updated`, `payment_intent.payment_failed`, `terminal.reader.action_failed`, from connected accounts | `STRIPE_WEBHOOK_SECRET` |
+  | `POST /api/v1/webhooks/stripe/accounts` | **thin** | `v2.core.account[requirements].updated`, `v2.core.account[configuration.merchant].capability_status_updated` | `STRIPE_ACCOUNT_WEBHOOK_SECRET` |
+
+  A destination with the other payload style is answered 400 `STRIPE_WEBHOOK_WRONG_PAYLOAD`; a new event type goes in the table, the destination, and `HANDLERS` in `payout.service.js`. `test/stripe/stripe-webhook-sdk.test.js` checks our parsing against the real SDK offline.
 
 ## fiskaly
 

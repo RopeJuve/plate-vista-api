@@ -643,13 +643,21 @@ export const createFakeStripe = () => {
     parseEventNotification(payload, header, secret) {
       const parsed = verify(payload, header, secret);
       if (parsed.object === "event") {
-        throw new Error("You passed a v1 Event to a method that expects a thin event notification.");
+        throw new Error(
+          "You passed a webhook payload to stripe.parseEventNotification, which expects an event notification. Use stripe.webhooks.constructEvent instead."
+        );
       }
       return parsed;
     },
     webhooks: {
       constructEvent(payload, header, secret) {
-        return verify(payload, header, secret);
+        const parsed = verify(payload, header, secret);
+        if (parsed.object === "v2.core.event") {
+          throw new Error(
+            "You passed a thin event notification to a function that expects a webhook. Use the corresponding EventNotification method instead."
+          );
+        }
+        return parsed;
       },
     },
   };

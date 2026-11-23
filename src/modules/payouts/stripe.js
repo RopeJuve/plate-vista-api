@@ -229,11 +229,33 @@ export const parseAccountEventNotification = (rawBody, signature) => {
   try {
     return stripe.parseEventNotification(rawBody, signature, secret);
   } catch (error) {
-    if (error?.type === "StripeSignatureVerificationError") {
-      throw new AppError("STRIPE_SIGNATURE_INVALID", "Invalid webhook signature");
-    }
-    throw error;
+    throw webhookError(error, rawBody, "thin");
   }
+};
+
+// The SDK refuses a correctly signed event of the other payload style (its
+// message differs between builds, so the payload is looked at instead): the
+// event destination was set up with the wrong one. Says which it must be.
+const PAYLOAD_OBJECT = { thin: "v2.core.event", snapshot: "event" };
+const payloadObjectOf = (rawBody) => {
+  try {
+    return JSON.parse(rawBody.toString("utf8"))?.object;
+  } catch {
+    return undefined;
+  }
+};
+const webhookError = (error, rawBody, wanted) => {
+  if (error?.type === "StripeSignatureVerificationError") {
+    return new AppError("STRIPE_SIGNATURE_INVALID", "Invalid webhook signature");
+  }
+  const sent = payloadObjectOf(rawBody);
+  if (sent && sent !== PAYLOAD_OBJECT[wanted] && Object.values(PAYLOAD_OBJECT).includes(sent)) {
+    return new AppError(
+      "STRIPE_WEBHOOK_WRONG_PAYLOAD",
+      `This webhook route takes ${wanted} events; set the Stripe event destination's payload to ${wanted} (docs/third-party-apis.md)`
+    );
+  }
+  return error;
 };
 
 // Verifies a webhook's Stripe-Signature against STRIPE_WEBHOOK_SECRET and
@@ -248,10 +270,7 @@ export const constructWebhookEvent = (rawBody, signature) => {
   try {
     return stripe.webhooks.constructEvent(rawBody, signature, secret);
   } catch (error) {
-    if (error?.type === "StripeSignatureVerificationError") {
-      throw new AppError("STRIPE_SIGNATURE_INVALID", "Invalid webhook signature");
-    }
-    throw error;
+    throw webhookError(error, rawBody, "snapshot");
   }
 };
 
