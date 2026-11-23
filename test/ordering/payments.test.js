@@ -6,6 +6,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { MongoMemoryReplSet } from "mongodb-memory-server";
+import mongoose from "mongoose";
 import { connectToDatabase, disconnectDatabase } from "../../src/db/db.js";
 import { generateToken, hashPassword } from "../../src/shared/auth.js";
 import {
@@ -23,7 +24,6 @@ import { stock } from "../../src/modules/ordering/stock.js";
 import { signing } from "../../src/modules/payments/signing.js";
 import { paymentEvents } from "../../src/modules/payments/events.js";
 import { clearPublished, published } from "../../src/realtime/events.js";
-import mongoose from "mongoose";
 import MenuItem from "../../src/modules/menu/menuItem.model.js";
 import Table from "../../src/modules/tables/table.model.js";
 import Employee from "../../src/modules/staff/employee.model.js";

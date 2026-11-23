@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
-import Order from "./order.model.js";
 import currency from "currency.js";
+import Order from "./order.model.js";
 import { AppError } from "../../shared/errors.js";
 import Restaurant from "../restaurants/restaurant.model.js";
 
