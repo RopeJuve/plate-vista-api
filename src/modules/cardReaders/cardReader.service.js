@@ -71,11 +71,19 @@ export const busyReaders =async (restaurantId, mongoSession = null) => {
   );
 };
 
+// How old a reader's status may be when shown (contract: CardReader.status).
+export const STATUS_MAX_AGE_MS = 30 * 1000;
+
+const checkedWithin = (reader, maxAgeMs, now) =>
+  Boolean(reader.statusCheckedAt) && now - reader.statusCheckedAt.getTime() <= maxAgeMs;
+
 // The restaurant's readers (stored ones, given) with the status Stripe
-// reports now, which is stored too. If Stripe cannot be read, they keep the
-// last status it reported.
-export const withStripeStatus = async (restaurantId, payoutAccount, readers) => {
+// reports now, which is stored too. With `maxAgeMs`, Stripe is asked only
+// when some reader's stored status is older than that. If Stripe cannot be
+// read, they keep the last status it reported.
+export const withStripeStatus = async (restaurantId, payoutAccount, readers, { maxAgeMs = 0 } = {}) => {
   if (readers.length === 0 || !payoutAccount?.stripeAccountId || !payoutAccount.terminalLocationId) return readers;
+  if (maxAgeMs > 0 && readers.every((reader) => checkedWithin(reader, maxAgeMs, Date.now()))) return readers;
   try {
     const atStripe = new Map(
       (await listStripeReaders({
@@ -83,10 +91,18 @@ export const withStripeStatus = async (restaurantId, payoutAccount, readers) => 
         locationId: payoutAccount.terminalLocationId,
       })).map((reader) => [reader.stripeReaderId, reader.status])
     );
-    const fresh = readers.map((reader) => ({ ...reader, status: atStripe.get(reader.stripeReaderId) ?? "offline" }));
+    const statusCheckedAt = new Date();
+    const fresh = readers.map((reader) => ({
+      ...reader,
+      status: atStripe.get(reader.stripeReaderId) ?? "offline",
+      statusCheckedAt,
+    }));
     await CardReader.bulkWrite(
       fresh.map((reader) => ({
-        updateOne: { filter: { _id: reader._id, restaurantId }, update: { $set: { status: reader.status } } },
+        updateOne: {
+          filter: { _id: reader._id, restaurantId },
+          update: { $set: { status: reader.status, statusCheckedAt } },
+        },
       }))
     );
     return fresh;
@@ -96,14 +112,14 @@ export const withStripeStatus = async (restaurantId, payoutAccount, readers) => 
   }
 };
 
-// Every reader with the status Stripe reports now. If Stripe cannot be read,
-// the last status it reported is shown.
+// Every reader with the status Stripe reported at most 30 s ago. If Stripe
+// cannot be read, the last status it reported is shown.
 export const listCardReaders = async (restaurantId) => {
   assertTerminalConfigured();
   const restaurant = await loadRestaurant(restaurantId);
   const account = restaurant.payoutAccount;
   const stored = await CardReader.find({ restaurantId }).sort(byName).collation(NAME_COLLATION).lean();
-  const readers = await withStripeStatus(restaurantId, account, stored);
+  const readers = await withStripeStatus(restaurantId, account, stored, { maxAgeMs: STATUS_MAX_AGE_MS });
   const busy = await busyReaders(restaurantId);
 
   return {

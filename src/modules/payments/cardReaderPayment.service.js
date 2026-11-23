@@ -4,7 +4,7 @@ import { z } from "zod";
 import Restaurant from "../restaurants/restaurant.model.js";
 import TableSession from "../ordering/session.model.js";
 import CardReader from "../cardReaders/cardReader.model.js";
-import { busyReaders, serializeCardReader, withStripeStatus } from "../cardReaders/cardReader.service.js";
+import { busyReaders, serializeCardReader, STATUS_MAX_AGE_MS, withStripeStatus } from "../cardReaders/cardReader.service.js";
 import { getSessionBill } from "../ordering/order.service.js";
 import { findSession } from "../ordering/session.service.js";
 import { isTseActive } from "../tse/tse.service.js";
@@ -390,15 +390,17 @@ export const presentTestCard = async (ctx, sessionId, input) => {
 
 // The pay panel's card reader button (staff only): HIDDEN without Stripe,
 // readers or an open bill; DISABLED with the first reason that applies;
-// otherwise OFFERED. The readers come with the status Stripe reports now and
-// the bill each one is taking a payment for.
+// otherwise OFFERED. The readers come with the status Stripe reported at
+// most 30 s ago and the bill each one is taking a payment for.
 export const cardReaderAvailability = async (restaurantId, bill, session) => {
   const hidden = { state: "HIDDEN", reason: null, readers: [] };
   if (!process.env.STRIPE_SECRET_KEY || session?.status === "closed") return hidden;
   const stored = await CardReader.find({ restaurantId }).sort(NAME_ORDER).collation(NAME_COLLATION).lean();
   if (stored.length === 0) return hidden;
   const restaurant = await Restaurant.findById(restaurantId).select("payoutAccount tse.setupStep").lean();
-  const readers = await withStripeStatus(restaurantId, restaurant?.payoutAccount, stored);
+  const readers = await withStripeStatus(restaurantId, restaurant?.payoutAccount, stored, {
+    maxAgeMs: STATUS_MAX_AGE_MS,
+  });
   const busy = await busyReaders(restaurantId);
   const takingAnotherBill = (reader) => {
     const busyWith = busy.get(String(reader._id));

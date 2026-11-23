@@ -16,6 +16,7 @@ import Table from "../../src/modules/tables/table.model.js";
 import Employee from "../../src/modules/staff/employee.model.js";
 import Restaurant from "../../src/modules/restaurants/restaurant.model.js";
 import Category from "../../src/modules/categories/category.model.js";
+import CardReader from "../../src/modules/cardReaders/cardReader.model.js";
 import { setStripeClient } from "../../src/modules/payouts/stripe.js";
 import { clearPublished, published } from "../../src/realtime/events.js";
 import { createFakeStripe } from "../support/fakeStripe.js";
@@ -626,6 +627,10 @@ test("a wrongly signed authorization webhook is refused and captures nothing", a
 
 const stripeReaderNamed = (p, name) => fake.readersOn(p.stripeAccountId).find((reader) => reader.label === name);
 
+// Time passes: the status Stripe last gave for the restaurant's readers is now `ms` old.
+const letReaderStatusAge = (p, ms) =>
+  CardReader.updateMany({ restaurantId: p.restaurant._id }, { $set: { statusCheckedAt: new Date(Date.now() - ms) } });
+
 test("starting needs the reader, and a reader of another restaurant is not found; the bill stays open", async () => {
   const p = await place();
   const other = await place();
@@ -768,8 +773,25 @@ test("the pay panel lists the readers with the status Stripe reports now, and of
   );
 
   fake.setReaderStatus(stripeReaderNamed(p, "Terrasse").id, "online");
+  await letReaderStatusAge(p, 31 * 1000);
   const again = (await p.bill()).body.cardReader;
   assert.deepEqual(again.readers.map((reader) => reader.status), ["online", "online"]);
+});
+
+test("the pay panel asks Stripe for reader status at most every 30 s", async () => {
+  const p = await place();
+  assert.deepEqual((await p.bill()).body.cardReader.readers.map((reader) => reader.status), ["online"]);
+  assert.equal(callsOf("terminal.readers.list").length, 1);
+
+  // Read again within 30 s: the status Stripe gave just now is shown.
+  fake.setReaderStatus(stripeReaderNamed(p, "Bar").id, "offline");
+  assert.deepEqual((await p.bill()).body.cardReader.readers.map((reader) => reader.status), ["online"]);
+  assert.deepEqual((await p.bill()).body.cardReader.readers.map((reader) => reader.status), ["online"]);
+  assert.equal(callsOf("terminal.readers.list").length, 1);
+
+  await letReaderStatusAge(p, 31 * 1000);
+  assert.deepEqual((await p.bill()).body.cardReader.readers.map((reader) => reader.status), ["offline"]);
+  assert.equal(callsOf("terminal.readers.list").length, 2);
 });
 
 test("card reader payment is disabled with NO_READER_AVAILABLE when every reader is offline", async () => {
