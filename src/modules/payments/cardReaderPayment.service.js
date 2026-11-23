@@ -15,8 +15,10 @@ import {
   createCardReaderPaymentIntent,
   isStripeTestMode,
   presentTestCard as presentStripeTestCard,
+  retrieveCardReaderPaymentDetails,
   TEST_CARD_NUMBERS,
 } from "../payouts/stripe.js";
+import Payment from "./payment.model.js";
 import { applicationFeeCents } from "./onlinePayment.service.js";
 import { recordCardReaderPayment } from "./payment.service.js";
 import { publishBillFrozen } from "./events.js";
@@ -333,8 +335,9 @@ export const captureCardReaderAuthorization = async (event) => {
     return;
   }
   const ctx = { restaurantId: bill.restaurantId, requestId: event.id, actor: STRIPE_ACTOR };
+  let recorded;
   try {
-    await recordCardReaderPayment(ctx, bill.sessionId, { paymentIntentId: intent.id, stripeAccountId: event.account });
+    recorded = await recordCardReaderPayment(ctx, bill.sessionId, { paymentIntentId: intent.id, stripeAccountId: event.account });
   } catch (error) {
     if (error?.code === "VALIDATION") {
       logger.warn({ ...log, err: error }, "card reader authorization names a PaymentIntent used on another bill; ignored");
@@ -345,5 +348,22 @@ export const captureCardReaderAuthorization = async (event) => {
     // card. A Stripe failure here fails the webhook, so Stripe sends it again.
     logger.warn({ ...log, err: error }, "card reader authorization for a bill not frozen for it; cancelling it");
     await cancelCardReaderPaymentIntent({ stripeAccountId: event.account, paymentIntentId: intent.id });
+  }
+  await keepCardPresentDetails(recorded?.payment, event.account, log);
+};
+
+// Keeps what the card receipt needs (brand, last 4, authorization code, AID,
+// application label, read method) on the Payment. Best effort: the payment
+// stands without it, and a redelivered event (which replays the Payment)
+// tries again.
+const keepCardPresentDetails = async (payment, stripeAccountId, log) => {
+  if (!payment || payment.card) return;
+  try {
+    const card = await retrieveCardReaderPaymentDetails({ stripeAccountId, paymentIntentId: payment.clientPaymentId });
+    if (!card) return;
+    await Payment.updateOne({ _id: payment._id, restaurantId: payment.restaurantId }, { $set: { card } });
+  } catch (error) {
+    logger.error({ ...log, err: error }, "reading the card reader payment's card details from Stripe failed");
+    captureException(error);
   }
 };

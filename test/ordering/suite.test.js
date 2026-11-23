@@ -2312,6 +2312,7 @@ const AUTHENTICATED_ROUTES = [
   "GET /api/v1/statistics/summary",
   "GET /api/v1/statistics/sales/categories",
   "GET /api/v1/statistics/sales/menu-items",
+  "GET /api/v1/statistics/sales/payment-methods",
   "GET /api/v1/statistics/orders/by-date",
   "GET /api/v1/statistics/customers/top",
   "GET /api/v1/statistics/:id/orders",
@@ -2759,6 +2760,12 @@ test("cross-tenant lists, creates, stats, public menu, and sockets stay inside r
   assert.equal(byItem.body[0].menu_item, "Pizza");
   assert.equal(byItem.body[0].numSold, 2);
   assert.equal(JSON.stringify(byItem.body).includes(`Secret ${tag}`), false);
+
+  // Neither bill is paid; payment stats count A's payments only (card-reader-receipt.test.js).
+  const byMethod = await asA("get", "/api/v1/statistics/sales/payment-methods");
+  cover("GET", "/api/v1/statistics/sales/payment-methods");
+  assert.equal(byMethod.status, 200);
+  assert.deepEqual(byMethod.body.map((row) => row.group), ["CASH", "CARD", "ONLINE"]);
 
   const byDate = await asA("get", "/api/v1/statistics/orders/by-date");
   cover("GET", "/api/v1/statistics/orders/by-date");
