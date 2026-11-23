@@ -35,10 +35,13 @@ export const ErrorCodes = {
   CARD_READER_OFFLINE: "CARD_READER_OFFLINE",
   // Internal: the webhook's card reader authorization is not the one the bill is frozen for.
   NOT_FROZEN_FOR_IT: "NOT_FROZEN_FOR_IT",
+  // Internal: a completed online payment that cannot pay the bill (a Late Payment, GLOSSARY.md); it is refunded.
+  LATE_PAYMENT: "LATE_PAYMENT",
   INTERNAL: "INTERNAL",
 };
 
-const STATUS_BY_CODE = {
+// Every ErrorCodes key has its HTTP status here (test/unit/errors.test.js).
+export const STATUS_BY_CODE = {
   VALIDATION: 400,
   NOT_FOUND: 404,
   OUT_OF_STOCK: 409,
@@ -73,15 +76,21 @@ const STATUS_BY_CODE = {
   CARD_READER_BUSY: 409,
   CARD_READER_OFFLINE: 409,
   NOT_FROZEN_FOR_IT: 409,
+  LATE_PAYMENT: 409,
   INTERNAL: 500,
 };
 
 export class AppError extends Error {
   constructor(code, message, status, details) {
+    // A programmer error, not an AppError: an unregistered code would
+    // otherwise answer a silent 500.
+    if (!Object.hasOwn(ErrorCodes, code)) {
+      throw new Error(`AppError: unregistered error code ${code}; add it to ErrorCodes and STATUS_BY_CODE`);
+    }
     super(message);
     this.name = "AppError";
     this.code = code;
-    this.status = status ?? STATUS_BY_CODE[code] ?? 500;
+    this.status = status ?? STATUS_BY_CODE[code];
     if (details !== undefined) this.details = details;
   }
 }
